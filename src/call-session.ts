@@ -12,6 +12,9 @@ import { Transcript, type TranscriptEntry } from './transcript';
 
 /** Remote clocks can be off; keep their timestamps within this window of ours. */
 const MAX_CLOCK_SKEW_MS = 60_000;
+/** A pair that hasn't connected by now probably lost a signaling message. */
+const STALL_TIMEOUT_MS = 15_000;
+const MAX_RESETS = 3;
 
 export type CallStatus =
   | { kind: 'joining' }
@@ -93,6 +96,8 @@ interface PeerState extends Participant {
   everConnected: boolean;
   /** A peer that reaches us via signaling before its presence syncs isn't gone yet. */
   seenInRoster: boolean;
+  resets: number;
+  stallTimer: number;
 }
 
 export class CallSession {
@@ -293,6 +298,10 @@ export class CallSession {
       else this.departed.add(from);
       return;
     }
+    if (payload.kind === 'reset') {
+      if (this.peers.has(from)) this.resetPeer(from, false);
+      return;
+    }
     if (!this.peers.has(from)) {
       if (this.peers.size >= ROOM_CAPACITY - 1) return;
       this.connectTo(from);
@@ -302,35 +311,71 @@ export class CallSession {
   }
 
   private connectTo(peerId: string): void {
-    const link = new PeerLink({
-      polite: this.selfId < peerId,
-      iceServers: this.iceServers,
-      localTracks: { audio: this.micTrack, video: this.screenTrack ?? this.cameraTrack },
-      sendSignal: (payload) => this.signaling.send(peerId, payload),
-      onRemoteStream: (stream) => this.updatePeer(peerId, (p) => (p.stream = stream)),
-      onConnectionState: (state) => this.handleConnectionState(peerId, state),
-      onChannelOpen: () => this.greet(peerId),
-      onMessage: (message) => this.handleMessage(peerId, message),
-    });
     this.peers.set(peerId, {
       id: peerId,
       name: '',
       media: null,
       stream: null,
       connection: 'connecting',
-      link,
+      link: this.createLink(peerId),
       everConnected: false,
       seenInRoster: false,
+      resets: 0,
+      stallTimer: this.watchForStall(peerId),
     });
     this.peakParticipants = Math.max(this.peakParticipants, this.peers.size + 1);
     this.applyEncoding();
     this.emitParticipants();
   }
 
+  private createLink(peerId: string): PeerLink {
+    const link: PeerLink = new PeerLink({
+      polite: this.selfId < peerId,
+      iceServers: this.iceServers,
+      localTracks: { audio: this.micTrack, video: this.screenTrack ?? this.cameraTrack },
+      sendSignal: (payload) => this.signaling.send(peerId, payload),
+      onRemoteStream: (stream) => this.updatePeer(peerId, (p) => (p.stream = stream)),
+      onConnectionState: (state) => this.peers.get(peerId)?.link === link && this.handleConnectionState(peerId, state),
+      onChannelOpen: () => this.greet(peerId),
+      onMessage: (message) => this.handleMessage(peerId, message),
+    });
+    return link;
+  }
+
+  /** Only the offering (impolite) side watches, so the two ends never reset each other in a loop. */
+  private watchForStall(peerId: string): number {
+    if (this.selfId < peerId) return 0;
+    return window.setTimeout(() => {
+      const peer = this.peers.get(peerId);
+      if (!peer || peer.everConnected || peer.resets >= MAX_RESETS || this.isFinished()) return;
+      console.warn(`[call] connection to ${peerId} stalled, starting over`);
+      this.resetPeer(peerId, true);
+    }, STALL_TIMEOUT_MS);
+  }
+
+  /** Replaces the connection to one peer with a fresh one, keeping who they are. */
+  private resetPeer(peerId: string, initiate: boolean): void {
+    const peer = this.peers.get(peerId);
+    if (!peer || this.isFinished()) return;
+    window.clearTimeout(peer.stallTimer);
+    peer.link.close();
+    // The reset goes out before the new offer: sends to a peer are delivered in order.
+    if (initiate) this.signaling.send(peerId, { kind: 'reset' });
+    peer.resets += 1;
+    peer.link = this.createLink(peerId);
+    peer.stream = null;
+    peer.connection = peer.everConnected ? 'reconnecting' : 'connecting';
+    peer.stallTimer = this.watchForStall(peerId);
+    this.applyEncoding();
+    this.emitParticipants();
+    this.updateStatus();
+  }
+
   private dropPeer(peerId: string): void {
     const peer = this.peers.get(peerId);
     if (!peer) return;
     this.departed.add(peerId);
+    window.clearTimeout(peer.stallTimer);
     peer.link.close();
     this.peers.delete(peerId);
     if (peer.name) {
@@ -564,7 +609,10 @@ export class CallSession {
     window.removeEventListener('pagehide', this.onPageHide);
     this.captioner?.stop();
     this.captioner = null;
-    for (const peer of this.peers.values()) peer.link.close();
+    for (const peer of this.peers.values()) {
+      window.clearTimeout(peer.stallTimer);
+      peer.link.close();
+    }
     this.peers.clear();
     for (const track of [this.micTrack, this.cameraTrack, this.screenTrack]) track?.stop();
     this.micTrack = this.cameraTrack = this.screenTrack = null;
