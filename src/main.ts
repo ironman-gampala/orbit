@@ -101,7 +101,7 @@ function showFinished(config: AppConfig, roomId: string, status: CallStatus, sum
       show((c) =>
         mountMessage(c, {
           title: 'You left the call',
-          body: transcript ? 'Your transcript is ready. It stays on this device until you download it.' : undefined,
+          body: transcript ? 'Your transcript is ready and saved on this device. Download it now or later from the home screen.' : undefined,
           actions: download ? [rejoin, download, home] : [rejoin, home],
         }),
       );
