@@ -1,83 +1,98 @@
 # Orbit
 
-**Live:** <https://orbitcall.netlify.app>
+**Private 1:1 video calls, straight between browsers.**
 
-A 1:1 video calling app that runs entirely in the browser. Audio, video, screen
-share and chat flow **peer-to-peer over WebRTC**; [Supabase Realtime](https://supabase.com/docs/guides/realtime)
-is used only so the two browsers can find each other (signaling). No database
-tables, no accounts, nothing is stored.
+**Live:** <https://orbitcall.netlify.app> · **How it's built:** [IMPLEMENTATION.md](IMPLEMENTATION.md)
+
+![Orbit in a call](docs/screenshots/04-in-call.png)
+
+Orbit is a WebRTC video calling app with no accounts and no installs. Audio, video, screen share and chat
+travel **peer-to-peer** between the two browsers. [Supabase Realtime](https://supabase.com/docs/guides/realtime)
+is used only so the browsers can find each other (signaling), and a [Cloudflare TURN](https://developers.cloudflare.com/realtime/turn/)
+relay steps in when a network blocks direct connections. Nothing is stored in a database.
 
 ## Features
 
-- Shareable room links (`/?room=abc-defg-hjk`) with a Meet-style code
-- Pre-join lobby: camera preview, camera/mic pickers, live mic level meter, name
-- Mute / camera on-off / hang up (`⌘/Ctrl + D` mic, `⌘/Ctrl + E` camera)
-- Screen sharing (swaps the outgoing video track without renegotiating)
-- Peer-to-peer text chat over an `RTCDataChannel`
-- Remote mute / camera-off / presenting indicators
-- Automatic ICE restart on connection failure, "room is full" for a third person
+- **Shareable room links:** `?room=abc-defg-hjk`, Meet-style codes without look-alike characters
+- **Pre-join lobby:** camera preview, camera/microphone pickers, live mic level meter, display name
+- **Call controls:** mute, camera on/off (really releases the camera), hang up; `⌘/Ctrl+D` and `⌘/Ctrl+E` shortcuts
+- **Screen sharing:** swaps the outgoing video track in place, no renegotiation
+- **In-call chat:** peer-to-peer over an `RTCDataChannel`, with unread badge and toasts
+- **Presence cues:** remote mute, camera-off avatar and "presenting" label
+- **Resilience:** automatic ICE restart, TURN fallback (UDP/TCP/TLS 443), "room is full" for a third person, "the other person left"
+- **Responsive:** works on phones and desktops
 
-## Setup
+| Lobby | Chat | Mobile |
+| --- | --- | --- |
+| ![Lobby](docs/screenshots/02-lobby.png) | ![Chat](docs/screenshots/05-chat.png) | ![Mobile](docs/screenshots/08-mobile-call.png) |
 
-1. **Create a Supabase project** (free tier is fine) at <https://supabase.com/dashboard>.
-2. In the project, open **Project Settings → API** and copy the **Project URL** and the **anon public** key.
-3. Make sure Realtime allows public channels: **Realtime → Settings → "Allow public access"** should be enabled (it is by default).
-4. Configure the app:
+## Quick start
 
-   ```bash
-   cp .env.example .env
-   # then fill in VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY
-   ```
+```bash
+npm install
+cp .env.example .env   # add your Supabase URL + publishable/anon key
+npm run dev            # http://localhost:5173
+```
 
-5. Install and run:
+Open the app, click **New call**, then open the same link in a second browser or device.
 
-   ```bash
-   npm install
-   npm run dev
-   ```
+Browsers only allow camera/microphone access on `https://` or `http://localhost`.
 
-6. Open the printed URL, click **New call**, then open the same link in another tab, browser, or device.
+### Supabase (signaling)
 
-> Browsers only allow camera/mic access on `https://` or `http://localhost`.
+1. Create a free project at <https://supabase.com/dashboard>.
+2. **Project Settings → API**: copy the **Project URL** and the **publishable** (or legacy **anon**) key into `.env`.
+3. **Realtime → Settings**: make sure **Allow public access** is on (the default).
 
-## Scripts
+No tables or migrations are needed.
 
-| Command             | What it does                           |
-| ------------------- | -------------------------------------- |
-| `npm run dev`       | Vite dev server with hot reload        |
-| `npm run build`     | Typecheck + production build (`dist/`) |
-| `npm run preview`   | Serve the production build locally     |
-| `npm test`          | Unit tests (Vitest)                    |
-| `npm run typecheck` | TypeScript only                        |
+### Cloudflare TURN (relay, recommended)
 
-## TURN relay
+VPNs such as Cloudflare WARP, corporate firewalls and many mobile networks block direct peer-to-peer traffic.
+Orbit's Netlify function `/api/ice-servers` exchanges a Cloudflare TURN key for credentials that expire after
+6 hours, so the key never reaches the browser.
 
-Direct peer-to-peer connections fail behind VPNs (e.g. Cloudflare WARP), strict corporate firewalls and
-many mobile networks. Orbit then relays media through Cloudflare's TURN service.
-
-The Netlify function `netlify/functions/ice-servers.mts` (served at `/api/ice-servers`) exchanges a
-Cloudflare TURN key for credentials that expire after 6 hours. The key never reaches the browser. It needs
-these Netlify environment variables (Cloudflare dashboard → Realtime → TURN Server → Create):
+1. Cloudflare dashboard → **Realtime → TURN Server → Create**.
+2. Set these as Netlify environment variables (not `VITE_`-prefixed, so they stay server-side):
 
 ```bash
 CF_TURN_KEY_ID=...
 CF_TURN_API_TOKEN=...
 ```
 
-If the endpoint is unavailable (e.g. plain `npm run dev`), the app falls back to public STUN plus any
-static TURN server configured in `.env` (`VITE_TURN_URLS`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL`).
+Without them (or under plain `npm run dev`), Orbit falls back to public STUN plus any static TURN server in `.env`.
+Use `netlify dev` to run the function locally.
 
-## How it works
+## Scripts
 
-| File                  | Responsibility                                                           |
-| --------------------- | ------------------------------------------------------------------------ |
-| `src/signaling.ts`    | Supabase channel "orbit:<room>": presence roster + addressed SDP/ICE     |
-| `src/roster.ts`       | Who's in the call, who's turned away, who is the "polite" peer           |
-| `src/peer.ts`         | `RTCPeerConnection` with perfect negotiation, data channel, replaceTrack |
-| `src/call-session.ts` | Orchestrates signaling, peer link and local media for the UI             |
-| `src/media.ts`        | getUserMedia/getDisplayMedia, device lists, mic level meter              |
-| `src/messages.ts`     | Validated chat/state messages sent over the data channel                 |
-| `src/ui/*`            | Landing, lobby, call and message screens (vanilla TS + DOM)              |
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server |
+| `npm run build` | Typecheck + production build into `dist/` |
+| `npm test` | Unit tests (Vitest) |
+| `npm run e2e` | Two headless Chrome instances hold a real call on the deployed site (`BASE_URL` to override) |
+| `npm run screenshots` | Regenerates `docs/screenshots` from the deployed site |
 
-Media is always encrypted by WebRTC (DTLS-SRTP) and never passes through Supabase; only the small
-connection-setup messages do.
+## Deploy (Netlify)
+
+```bash
+netlify sites:create --name <your-name>
+netlify env:set VITE_SUPABASE_URL ...
+netlify env:set VITE_SUPABASE_ANON_KEY ...
+# plus CF_TURN_KEY_ID / CF_TURN_API_TOKEN for TURN
+netlify deploy --prod
+```
+
+`netlify.toml` holds the build command, publish directory and camera/microphone permission headers.
+
+## Tech
+
+TypeScript + Vite (no UI framework), WebRTC, Supabase Realtime (presence + broadcast), Netlify Functions,
+Cloudflare TURN, Vitest and Puppeteer.
+
+## Security notes
+
+- Anyone with a room link can join while a slot is free. Codes are random (~8×10¹⁴ combinations).
+- Media is always encrypted by WebRTC (DTLS-SRTP) and never passes through Supabase. TURN relays forward
+  encrypted packets without being able to read them.
+- The Supabase publishable key is designed to be public. The Cloudflare TURN token lives only in Netlify's server environment.
