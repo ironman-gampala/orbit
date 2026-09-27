@@ -1,25 +1,18 @@
 import { generateRoomId, MAX_ROOM_NAME_LENGTH, normalizeRoomName, roomKey, roomSearch } from '../room';
-import { ROOM_CAPACITY } from '../roster';
 import { store, type RecentRoom } from '../storage';
 import { dayPart, formatDuration, formatWhen } from '../time';
 import { downloadText } from '../transcript';
-import { h, icon, navigate, showToast, type Cleanup, type IconName } from './dom';
+import { HOME_COPY as COPY } from './copy';
+import { h, icon, navigate, showToast, type Cleanup } from './dom';
 
 export function renderBrand(): HTMLElement {
   return h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, icon('orbit')), h('span', {}, 'Orbit'));
 }
 
-const GREETINGS = {
-  morning: 'Good morning',
-  afternoon: 'Good afternoon',
-  evening: 'Good evening',
-  night: 'Burning the midnight oil',
-} as const;
-
-function greeting(name: string): string {
+function greeting(name: string, returning: boolean): string {
   const first = name.trim().split(/\s+/)[0];
-  const hello = GREETINGS[dayPart()];
-  return first ? `${hello}, ${first}` : hello;
+  const hello = COPY.greetings[dayPart()];
+  return `${first ? `${hello}, ${first}` : hello}. ${returning ? COPY.welcomeBack : COPY.welcomeNew}`;
 }
 
 function roomHue(name: string): number {
@@ -28,28 +21,22 @@ function roomHue(name: string): number {
   return hash % 360;
 }
 
-const FEATURES: { icon: IconName; title: string; body: string }[] = [
-  { icon: 'people', title: `Up to ${ROOM_CAPACITY} people`, body: 'Group calls with a grid view and a spotlight for screen shares.' },
-  { icon: 'captions', title: 'Live captions', body: 'Captions for everyone and a transcript you can download.' },
-  { icon: 'lock', title: 'Peer to peer', body: 'Audio and video go directly between browsers.' },
-  { icon: 'history', title: 'Recent rooms', body: 'Rooms and transcripts are remembered on this device.' },
-];
-
 export function mountLanding(container: HTMLElement): Cleanup {
   const name = store.getName();
+  const returning = store.recentRooms().length > 0 || !!name;
 
   // Join by name, number or link
   const input = h('input', {
     class: 'input',
     type: 'text',
-    placeholder: 'Room name, number or link',
+    placeholder: COPY.joinPlaceholder,
     'aria-label': 'Room name, number or link',
     autocomplete: 'off',
     spellcheck: 'false',
     maxLength: 500,
     title: `Up to ${MAX_ROOM_NAME_LENGTH} characters`,
   });
-  const joinButton = h('button', { class: 'btn btn-text', type: 'submit', disabled: true }, 'Join');
+  const joinButton = h('button', { class: 'btn btn-text', type: 'submit', disabled: true }, COPY.join);
   const syncJoin = () => (joinButton.disabled = !normalizeRoomName(input.value));
   input.addEventListener('input', syncJoin);
 
@@ -99,14 +86,14 @@ export function mountLanding(container: HTMLElement): Cleanup {
     'div',
     { class: 'recent-empty' },
     h('span', { class: 'recent-empty-icon' }, icon('history')),
-    h('p', {}, 'Rooms you join will show up here so getting back is a single click.'),
+    h('p', {}, COPY.recentEmpty),
   );
   let clearArmed = 0;
-  const clearButton = h('button', { class: 'btn btn-text btn-sm', type: 'button', onClick: () => clearAll() }, 'Clear');
+  const clearButton = h('button', { class: 'btn btn-text btn-sm', type: 'button', onClick: () => clearAll() }, COPY.clear);
   const recentCard = h(
     'aside',
     { class: 'recent-card', 'aria-label': 'Recent rooms' },
-    h('header', { class: 'recent-header' }, h('h2', {}, 'Recent rooms'), clearButton),
+    h('header', { class: 'recent-header' }, h('h2', {}, COPY.recentTitle), clearButton),
     recentEmpty,
     recentList,
   );
@@ -169,19 +156,19 @@ export function mountLanding(container: HTMLElement): Cleanup {
 
   function clearAll() {
     if (!clearArmed) {
-      clearButton.textContent = 'Tap again to clear';
+      clearButton.textContent = COPY.clearConfirm;
       clearArmed = window.setTimeout(() => {
         clearArmed = 0;
-        clearButton.textContent = 'Clear';
+        clearButton.textContent = COPY.clear;
       }, 3000);
       return;
     }
     window.clearTimeout(clearArmed);
     clearArmed = 0;
-    clearButton.textContent = 'Clear';
+    clearButton.textContent = COPY.clear;
     store.clearRooms();
     renderRecents();
-    showToast('Recent rooms cleared from this device');
+    showToast(COPY.cleared);
   }
 
   const page = h(
@@ -194,9 +181,9 @@ export function mountLanding(container: HTMLElement): Cleanup {
       h(
         'div',
         { class: 'home-main' },
-        h('p', { class: 'greeting' }, icon(dayPart() === 'evening' || dayPart() === 'night' ? 'moon' : 'sun'), greeting(name)),
-        h('h1', {}, 'Video calls, straight between browsers.'),
-        h('p', { class: 'lead' }, `Group calls for up to ${ROOM_CAPACITY} people powered by WebRTC. No accounts, no installs.`),
+        h('p', { class: 'greeting' }, icon(dayPart() === 'evening' || dayPart() === 'night' ? 'moon' : 'sun'), greeting(name, returning)),
+        h('h1', {}, COPY.headline),
+        h('p', { class: 'lead' }, COPY.lead),
         h(
           'div',
           { class: 'landing-actions' },
@@ -204,19 +191,28 @@ export function mountLanding(container: HTMLElement): Cleanup {
             'button',
             { class: 'btn btn-primary btn-lg', type: 'button', onClick: () => navigate(roomSearch(generateRoomId())) },
             icon('video'),
-            'New room',
+            COPY.newRoom,
           ),
           form,
         ),
-        h('p', { class: 'hint' }, 'Try ', suggestion('Design sync'), ' or ', suggestion('4021')),
-        h('p', { class: 'privacy-note' }, icon('lock'), 'Anyone who knows a room name can join it. New room gives you a random private code.'),
+        h(
+          'p',
+          { class: 'hint' },
+          COPY.hintLead,
+          suggestion(COPY.suggestions[0]),
+          COPY.hintJoiner,
+          suggestion(COPY.suggestions[1]),
+        ),
+        h('p', { class: 'privacy-note' }, icon('lock'), COPY.privacy),
       ),
       recentCard,
     ),
     h(
       'section',
       { class: 'features', 'aria-label': 'Features' },
-      ...FEATURES.map((f) => h('article', { class: 'feature' }, h('span', { class: 'feature-icon' }, icon(f.icon)), h('h3', {}, f.title), h('p', {}, f.body))),
+      ...COPY.features.map((f) =>
+        h('article', { class: 'feature' }, h('span', { class: 'feature-icon' }, icon(f.icon)), h('h3', {}, f.title), h('p', {}, f.body)),
+      ),
     ),
   );
 
