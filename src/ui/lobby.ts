@@ -75,7 +75,7 @@ export function mountLobby(
     h(
       'div',
       { class: 'room-chip' },
-      h('span', { class: 'room-code' }, opts.roomId),
+      h('span', { class: 'room-name', title: opts.roomId }, opts.roomId),
       h(
         'button',
         {

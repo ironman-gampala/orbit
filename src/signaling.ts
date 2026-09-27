@@ -1,4 +1,5 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
+import { roomKey } from './room';
 import type { RosterEntry } from './roster';
 
 export type SignalPayload =
@@ -54,7 +55,7 @@ export class SupabaseSignaling implements Signaling {
     const { url, anonKey, roomId, selfId, handlers } = this.opts;
     const client = getClient(url, anonKey);
 
-    const channel = client.channel(`orbit:${roomId}`, {
+    const channel = client.channel(`orbit:${encodeURIComponent(roomKey(roomId))}`, {
       config: { broadcast: { self: false, ack: false }, presence: { key: selfId } },
     });
     this.channel = channel;

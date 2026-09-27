@@ -258,9 +258,12 @@ select.input {
   height: 20px;
 }
 
-.room-code {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  letter-spacing: 0.04em;
+.room-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
 }
 
 /* ---------- Landing ---------- */

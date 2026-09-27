@@ -1,7 +1,7 @@
 import './style.css';
 import { loadConfig, type AppConfig } from './config';
 import type { CallStatus } from './call-session';
-import { roomIdFromLocation } from './room';
+import { roomFromLocation } from './room';
 import { mountCall } from './ui/call';
 import { h, navigate, type Cleanup } from './ui/dom';
 import { mountLanding } from './ui/landing';
@@ -34,7 +34,7 @@ function route(): void {
     return;
   }
 
-  const roomId = roomIdFromLocation();
+  const roomId = roomFromLocation();
   if (!roomId) {
     if (new URLSearchParams(location.search).has('room')) history.replaceState(null, '', location.pathname);
     show(mountLanding);

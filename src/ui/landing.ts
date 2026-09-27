@@ -1,4 +1,4 @@
-import { generateRoomId, normalizeRoomId } from '../room';
+import { generateRoomId, MAX_ROOM_NAME_LENGTH, normalizeRoomName, roomSearch } from '../room';
 import { h, icon, navigate, type Cleanup } from './dom';
 
 export function renderBrand(): HTMLElement {
@@ -9,16 +9,18 @@ export function mountLanding(container: HTMLElement): Cleanup {
   const input = h('input', {
     class: 'input',
     type: 'text',
-    placeholder: 'Enter a code or link',
-    'aria-label': 'Meeting code or link',
+    placeholder: 'Room name, number or link',
+    'aria-label': 'Room name, number or link',
     autocomplete: 'off',
     spellcheck: 'false',
+    maxLength: 500,
   });
   const joinButton = h('button', { class: 'btn btn-text', type: 'submit', disabled: true }, 'Join');
 
   input.addEventListener('input', () => {
-    joinButton.disabled = !normalizeRoomId(input.value);
+    joinButton.disabled = !normalizeRoomName(input.value);
   });
+  input.title = `Up to ${MAX_ROOM_NAME_LENGTH} characters`;
 
   const form = h(
     'form',
@@ -26,8 +28,8 @@ export function mountLanding(container: HTMLElement): Cleanup {
       class: 'join-form',
       onSubmit: (event: Event) => {
         event.preventDefault();
-        const room = normalizeRoomId(input.value);
-        if (room) navigate(`?room=${room}`);
+        const room = normalizeRoomName(input.value);
+        if (room) navigate(roomSearch(room));
       },
     },
     input,
@@ -52,7 +54,7 @@ export function mountLanding(container: HTMLElement): Cleanup {
         { class: 'landing-actions' },
         h(
           'button',
-          { class: 'btn btn-primary btn-lg', type: 'button', onClick: () => navigate(`?room=${generateRoomId()}`) },
+          { class: 'btn btn-primary btn-lg', type: 'button', onClick: () => navigate(roomSearch(generateRoomId())) },
           icon('video'),
           'New call',
         ),

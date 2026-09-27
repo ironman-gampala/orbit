@@ -73,7 +73,7 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
   const controls = h(
     'footer',
     { class: 'call-bar' },
-    h('div', { class: 'call-meta' }, statusDot, clock, h('span', { class: 'divider' }), h('span', { class: 'room-code' }, opts.roomId)),
+    h('div', { class: 'call-meta' }, statusDot, clock, h('span', { class: 'divider' }), h('span', { class: 'room-name', title: opts.roomId }, opts.roomId)),
     h('div', { class: 'call-controls' }, micButton, camButton, screenButton, chatButton, hangupButton),
     h('div', { class: 'call-side' }),
   );
