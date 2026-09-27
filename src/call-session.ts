@@ -2,11 +2,16 @@ import { videoEncodingFor } from './bandwidth';
 import type { AppConfig } from './config';
 import { fetchIceServers } from './ice';
 import { acquireCamera, acquireMicrophone, acquireScreen, canShareScreen, describeMediaError } from './media';
-import { MAX_CHAT_LENGTH, type MediaState, type PeerMessage } from './messages';
+import { MAX_CAPTION_LENGTH, MAX_CHAT_LENGTH, type MediaState, type PeerMessage } from './messages';
 import { PeerLink } from './peer';
 import { randomId } from './room';
 import { ROOM_CAPACITY, resolveRoster, type RosterEntry } from './roster';
 import { SupabaseSignaling, type SignalPayload, type Signaling } from './signaling';
+import { Captioner, speechRecognitionSupported, type CaptionResult } from './speech';
+import { Transcript, type TranscriptEntry } from './transcript';
+
+/** Remote clocks can be off; keep their timestamps within this window of ours. */
+const MAX_CLOCK_SKEW_MS = 60_000;
 
 export type CallStatus =
   | { kind: 'joining' }
@@ -45,12 +50,31 @@ export interface LocalMediaSnapshot {
   media: MediaState;
 }
 
+export interface Caption {
+  /** 'self' for the local speaker, otherwise the peer id. */
+  speakerId: string;
+  name: string;
+  text: string;
+  final: boolean;
+}
+
+export interface TranscriptionState {
+  on: boolean;
+  /** Who flipped the switch most recently ('You' when it was us). */
+  by: string;
+  /** Whether this browser can transcribe the local microphone. */
+  supported: boolean;
+}
+
 export interface CallSessionHandlers {
   onStatus(status: CallStatus): void;
   onParticipants(participants: Participant[]): void;
   onLocalMedia(snapshot: LocalMediaSnapshot): void;
   onChat(entry: ChatEntry): void;
   onNotice(message: string): void;
+  onCaption(caption: Caption): void;
+  onTranscription(state: TranscriptionState): void;
+  onTranscript(entries: readonly TranscriptEntry[]): void;
 }
 
 export interface CallSessionOptions {
@@ -74,6 +98,14 @@ interface PeerState extends Participant {
 export class CallSession {
   readonly selfId = randomId();
   readonly canShareScreen = canShareScreen();
+  readonly transcript = new Transcript();
+  readonly startedAt = Date.now();
+  /** Most people in the room at once, including us. */
+  peakParticipants = 1;
+
+  private transcription = { on: false, at: 0, by: '' };
+  private captioner: Captioner | null = null;
+  private readonly captionStarts = new Map<string, number>();
 
   private readonly signaling: Signaling;
   private readonly handlers: CallSessionHandlers;
@@ -128,6 +160,7 @@ export class CallSession {
       if (this.isFinished()) return;
       await this.signaling.join();
       this.joined = true;
+      this.addEvent('You joined the call');
       this.updateStatus();
     } catch (err) {
       this.teardown();
@@ -138,6 +171,7 @@ export class CallSession {
   async hangUp(): Promise<void> {
     if (this.isFinished()) return;
     this.sayGoodbye();
+    this.addEvent('You left the call');
     this.teardown();
     this.setStatus({ kind: 'ended' });
   }
@@ -148,7 +182,20 @@ export class CallSession {
     const message: PeerMessage = { type: 'chat', id: randomId(), text: trimmed, sentAt: Date.now() };
     if (!this.broadcast(message)) return false;
     this.handlers.onChat({ id: message.id, from: 'me', name: this.opts.name, text: trimmed, sentAt: message.sentAt });
+    this.addTranscript({ kind: 'chat', id: `chat:${message.id}`, speaker: this.opts.name, text: trimmed, at: message.sentAt });
     return true;
+  }
+
+  /** Captions are room-wide: everyone transcribes their own mic while the switch is on. */
+  setTranscription(on: boolean): void {
+    if (on === this.transcription.on || this.isFinished()) return;
+    const next = { on, at: Math.max(Date.now(), this.transcription.at + 1), by: this.opts.name };
+    this.applyTranscription(next, true);
+    this.broadcast({ type: 'transcription', ...next });
+  }
+
+  get transcriptionOn(): boolean {
+    return this.transcription.on;
   }
 
   async toggleMic(): Promise<void> {
@@ -162,6 +209,7 @@ export class CallSession {
       this.micOn = !this.micOn;
       this.micTrack.enabled = this.micOn;
     }
+    this.captioner?.setPaused(!this.micOn);
     this.mediaChanged();
   }
 
@@ -261,7 +309,7 @@ export class CallSession {
       sendSignal: (payload) => this.signaling.send(peerId, payload),
       onRemoteStream: (stream) => this.updatePeer(peerId, (p) => (p.stream = stream)),
       onConnectionState: (state) => this.handleConnectionState(peerId, state),
-      onChannelOpen: () => this.sendState(peerId),
+      onChannelOpen: () => this.greet(peerId),
       onMessage: (message) => this.handleMessage(peerId, message),
     });
     this.peers.set(peerId, {
@@ -274,6 +322,7 @@ export class CallSession {
       everConnected: false,
       seenInRoster: false,
     });
+    this.peakParticipants = Math.max(this.peakParticipants, this.peers.size + 1);
     this.applyEncoding();
     this.emitParticipants();
   }
@@ -284,7 +333,11 @@ export class CallSession {
     this.departed.add(peerId);
     peer.link.close();
     this.peers.delete(peerId);
-    if (peer.name) this.handlers.onNotice(`${peer.name} left the call`);
+    if (peer.name) {
+      this.handlers.onNotice(`${peer.name} left the call`);
+      this.addEvent(`${peer.name} left the call`);
+    }
+    this.handlers.onCaption({ speakerId: peerId, name: peer.name, text: '', final: true });
     this.applyEncoding();
     this.emitParticipants();
     this.updateStatus();
@@ -308,22 +361,116 @@ export class CallSession {
   private handleMessage(peerId: string, message: PeerMessage): void {
     const peer = this.peers.get(peerId);
     if (!peer) return;
-    if (message.type === 'chat') {
-      this.handlers.onChat({
-        id: message.id,
-        from: 'peer',
-        name: peer.name || 'Guest',
-        text: message.text,
-        sentAt: message.sentAt,
-      });
-      return;
+    switch (message.type) {
+      case 'chat': {
+        const name = peer.name || 'Guest';
+        this.handlers.onChat({ id: message.id, from: 'peer', name, text: message.text, sentAt: message.sentAt });
+        this.addTranscript({
+          kind: 'chat',
+          id: `chat:${peerId}:${message.id}`,
+          speaker: name,
+          text: message.text,
+          at: this.clampRemoteTime(message.sentAt),
+        });
+        return;
+      }
+      case 'caption': {
+        const name = peer.name || 'Guest';
+        this.handlers.onCaption({ speakerId: peerId, name, text: message.text, final: message.final });
+        if (message.final && this.transcription.on) {
+          this.addTranscript({
+            kind: 'speech',
+            id: `speech:${peerId}:${message.id}`,
+            speaker: name,
+            text: message.text,
+            at: this.clampRemoteTime(message.at),
+          });
+        }
+        return;
+      }
+      case 'transcription':
+        this.applyTranscription(message, false);
+        return;
+      case 'state': {
+        const firstState = !peer.name;
+        this.updatePeer(peerId, (p) => {
+          p.name = message.name.trim() || 'Guest';
+          p.media = message.media;
+        });
+        if (firstState) {
+          this.handlers.onNotice(`${peer.name} joined the call`);
+          this.addEvent(`${peer.name} joined the call`);
+        }
+      }
     }
-    const firstState = !peer.name;
-    this.updatePeer(peerId, (p) => {
-      p.name = message.name.trim() || 'Guest';
-      p.media = message.media;
-    });
-    if (firstState) this.handlers.onNotice(`${peer.name} joined the call`);
+  }
+
+  /** Bring a newly connected peer up to date. */
+  private greet(peerId: string): void {
+    this.sendState(peerId);
+    if (this.transcription.at) this.peers.get(peerId)?.link.send({ type: 'transcription', ...this.transcription });
+  }
+
+  private applyTranscription(next: { on: boolean; at: number; by: string }, local: boolean): void {
+    if (next.at <= this.transcription.at) return;
+    const changed = next.on !== this.transcription.on;
+    this.transcription = { on: next.on, at: next.at, by: next.by };
+    if (changed) {
+      const who = local ? 'You' : next.by || 'Someone';
+      const text = next.on ? `${who} turned on captions and the transcript` : `${who} turned off captions`;
+      this.addEvent(text);
+      if (!local) this.handlers.onNotice(text);
+      if (next.on && !speechRecognitionSupported()) {
+        this.handlers.onNotice('This browser can’t transcribe your voice, but you’ll still see everyone else’s captions.');
+      }
+    }
+    this.syncCaptioner();
+    this.handlers.onTranscription({ on: next.on, by: local ? 'You' : next.by, supported: speechRecognitionSupported() });
+  }
+
+  private syncCaptioner(): void {
+    if (this.transcription.on && !this.isFinished()) {
+      if (this.captioner || !speechRecognitionSupported()) return;
+      this.captioner = new Captioner({
+        onResult: (result) => this.handleOwnCaption(result),
+        onError: (message) => this.handlers.onNotice(message),
+      });
+      this.captioner.setPaused(!this.micOn);
+      this.captioner.start();
+    } else {
+      this.captioner?.stop();
+      this.captioner = null;
+      this.captionStarts.clear();
+      this.handlers.onCaption({ speakerId: 'self', name: this.opts.name, text: '', final: true });
+    }
+  }
+
+  private handleOwnCaption({ key, text, final }: CaptionResult): void {
+    if (this.isFinished()) return;
+    const id = `${this.selfId}:${key}`;
+    // Stamp an utterance with when it started, so it sorts before chat typed while it was spoken.
+    const at = this.captionStarts.get(id) ?? Date.now();
+    if (final) this.captionStarts.delete(id);
+    else this.captionStarts.set(id, at);
+
+    const clipped = text.slice(0, MAX_CAPTION_LENGTH);
+    this.handlers.onCaption({ speakerId: 'self', name: this.opts.name, text: clipped, final });
+    this.broadcast({ type: 'caption', id, text: clipped, final, at });
+    if (final) this.addTranscript({ kind: 'speech', id: `speech:self:${id}`, speaker: this.opts.name, text: clipped, at });
+  }
+
+  private addEvent(text: string): void {
+    this.addTranscript({ kind: 'event', id: `event:${randomId()}`, text, at: Date.now() });
+  }
+
+  private addTranscript(entry: TranscriptEntry): void {
+    this.transcript.add(entry);
+    this.handlers.onTranscript(this.transcript.entries);
+  }
+
+  private clampRemoteTime(at: number): number {
+    const now = Date.now();
+    return Math.min(now, Math.max(now - MAX_CLOCK_SKEW_MS, at));
   }
 
   private updatePeer(peerId: string, change: (peer: PeerState) => void): void {
@@ -415,6 +562,8 @@ export class CallSession {
 
   private teardown(): void {
     window.removeEventListener('pagehide', this.onPageHide);
+    this.captioner?.stop();
+    this.captioner = null;
     for (const peer of this.peers.values()) peer.link.close();
     this.peers.clear();
     for (const track of [this.micTrack, this.cameraTrack, this.screenTrack]) track?.stop();

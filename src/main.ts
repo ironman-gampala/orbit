@@ -3,7 +3,8 @@ import { loadConfig, type AppConfig } from './config';
 import type { CallStatus } from './call-session';
 import { roomFromLocation } from './room';
 import { ROOM_CAPACITY } from './roster';
-import { mountCall } from './ui/call';
+import { downloadText } from './transcript';
+import { mountCall, type CallSummary } from './ui/call';
 import { h, navigate, type Cleanup } from './ui/dom';
 import { mountLanding } from './ui/landing';
 import { mountLobby, type LobbyResult } from './ui/lobby';
@@ -50,12 +51,19 @@ function showLobby(config: AppConfig, roomId: string): void {
 }
 
 function showCall(config: AppConfig, roomId: string, lobby: LobbyResult): void {
-  show((c) => mountCall(c, { config, roomId, lobby, onFinished: (status) => showFinished(config, roomId, status) }));
+  show((c) =>
+    mountCall(c, { config, roomId, lobby, onFinished: (status, summary) => showFinished(config, roomId, status, summary) }),
+  );
 }
 
-function showFinished(config: AppConfig, roomId: string, status: CallStatus): void {
+function showFinished(config: AppConfig, roomId: string, status: CallStatus, summary: CallSummary): void {
   const home = { label: 'Return to home screen', onClick: () => navigate('') };
   const rejoin = { label: 'Rejoin', primary: true, onClick: () => showLobby(config, roomId) };
+  const transcript = summary.transcript;
+  const download = transcript && {
+    label: 'Download transcript',
+    onClick: () => downloadText(transcript.filename, transcript.text),
+  };
 
   // Defer so the call screen finishes its own status handler before being torn down.
   queueMicrotask(() => {
@@ -70,7 +78,13 @@ function showFinished(config: AppConfig, roomId: string, status: CallStatus): vo
     } else if (status.kind === 'error') {
       show((c) => mountMessage(c, { title: 'Could not join the call', body: status.message, actions: [rejoin, home] }));
     } else {
-      show((c) => mountMessage(c, { title: 'You left the call', actions: [rejoin, home] }));
+      show((c) =>
+        mountMessage(c, {
+          title: 'You left the call',
+          body: transcript ? 'Your transcript is ready. It stays on this device until you download it.' : undefined,
+          actions: download ? [rejoin, download, home] : [rejoin, home],
+        }),
+      );
     }
   });
 }
