@@ -1,4 +1,5 @@
 import type { AppConfig } from './config';
+import { fetchIceServers } from './ice';
 import { acquireCamera, acquireMicrophone, acquireScreen, canShareScreen, describeMediaError } from './media';
 import { MAX_CHAT_LENGTH, type MediaState, type PeerMessage } from './messages';
 import { PeerLink } from './peer';
@@ -68,6 +69,7 @@ export class CallSession {
   private everConnected = false;
   private readonly departed = new Set<string>();
   private remoteName = '';
+  private iceServers: RTCIceServer[];
 
   private micTrack: MediaStreamTrack | null;
   private cameraTrack: MediaStreamTrack | null;
@@ -77,6 +79,7 @@ export class CallSession {
 
   constructor(private readonly opts: CallSessionOptions) {
     this.handlers = opts.handlers;
+    this.iceServers = opts.config.iceServers;
     this.micTrack = opts.stream.getAudioTracks()[0] ?? null;
     this.cameraTrack = opts.stream.getVideoTracks()[0] ?? null;
     this.micOn = opts.micOn && !!this.micTrack;
@@ -104,6 +107,8 @@ export class CallSession {
     this.emitLocal();
     this.setStatus({ kind: 'joining' });
     try {
+      this.iceServers = await fetchIceServers(this.opts.config.iceServers);
+      if (this.isFinished()) return;
       await this.signaling.join();
       if (this.status.kind === 'joining') this.setStatus({ kind: 'waiting' });
     } catch (err) {
@@ -227,7 +232,7 @@ export class CallSession {
     this.everConnected = false;
     this.link = new PeerLink({
       polite: this.selfId < peerId,
-      iceServers: this.opts.config.iceServers,
+      iceServers: this.iceServers,
       localTracks: { audio: this.micTrack, video: this.screenTrack ?? this.cameraTrack },
       sendSignal: (payload) => this.signaling.send(peerId, payload),
       onRemoteStream: (stream) => this.handlers.onRemoteStream(stream),

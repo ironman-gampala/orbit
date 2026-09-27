@@ -50,18 +50,22 @@ tables, no accounts, nothing is stored.
 | `npm test`          | Unit tests (Vitest)                    |
 | `npm run typecheck` | TypeScript only                        |
 
-## TURN (optional)
+## TURN relay
 
-The app uses Google's public STUN servers, which work for most home networks. Peers behind symmetric NAT
-or strict corporate firewalls need a TURN relay. Add one in `.env`:
+Direct peer-to-peer connections fail behind VPNs (e.g. Cloudflare WARP), strict corporate firewalls and
+many mobile networks. Orbit then relays media through Cloudflare's TURN service.
+
+The Netlify function `netlify/functions/ice-servers.mts` (served at `/api/ice-servers`) exchanges a
+Cloudflare TURN key for credentials that expire after 6 hours. The key never reaches the browser. It needs
+these Netlify environment variables (Cloudflare dashboard → Realtime → TURN Server → Create):
 
 ```bash
-VITE_TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
-VITE_TURN_USERNAME=user
-VITE_TURN_CREDENTIAL=secret
+CF_TURN_KEY_ID=...
+CF_TURN_API_TOKEN=...
 ```
 
-Note that `VITE_*` values are bundled into the client; use short-lived TURN credentials for anything public.
+If the endpoint is unavailable (e.g. plain `npm run dev`), the app falls back to public STUN plus any
+static TURN server configured in `.env` (`VITE_TURN_URLS`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL`).
 
 ## How it works
 
