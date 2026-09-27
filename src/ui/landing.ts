@@ -2,7 +2,7 @@ import { generateRoomId, normalizeRoomId } from '../room';
 import { h, icon, navigate, type Cleanup } from './dom';
 
 export function renderBrand(): HTMLElement {
-  return h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, icon('video')), h('span', {}, 'Meets'));
+  return h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, icon('orbit')), h('span', {}, 'Orbit'));
 }
 
 export function mountLanding(container: HTMLElement): Cleanup {

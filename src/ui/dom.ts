@@ -47,6 +47,8 @@ const ICONS = {
   close:
     '<path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>',
   video: '<path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/>',
+  orbit:
+    '<circle cx="12" cy="12" r="4.2"/><ellipse cx="12" cy="12" rx="10" ry="4.6" fill="none" stroke="currentColor" stroke-width="1.8" transform="rotate(-28 12 12)"/><circle cx="20.2" cy="7.4" r="1.9"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -94,7 +96,7 @@ export function attachStream(video: HTMLVideoElement, stream: MediaStream | null
 
 export function navigate(search: string): void {
   history.pushState(null, '', search || window.location.pathname);
-  window.dispatchEvent(new Event('meets:navigate'));
+  window.dispatchEvent(new Event('orbit:navigate'));
 }
 
 /** A UI screen mounts into a container and returns a cleanup function. */

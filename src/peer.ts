@@ -76,7 +76,7 @@ export class PeerLink {
     if (!opts.polite) {
       pc.addTransceiver(this.desired.audio ?? 'audio', { direction: 'sendrecv' });
       pc.addTransceiver(this.desired.video ?? 'video', { direction: 'sendrecv' });
-      this.attachChannel(pc.createDataChannel('meets', { ordered: true }));
+      this.attachChannel(pc.createDataChannel('orbit', { ordered: true }));
     }
   }
 

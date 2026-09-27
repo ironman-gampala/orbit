@@ -25,7 +25,7 @@ function route(): void {
         body: h(
           'div',
           {},
-          h('p', {}, 'Meets uses Supabase Realtime to let two browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
+          h('p', {}, 'Orbit uses Supabase Realtime to let two browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
           h('pre', {}, result.missing.map((k) => `${k}=...`).join('\n')),
           h('p', {}, 'See the README for step-by-step setup.'),
         ),
@@ -59,7 +59,7 @@ function showFinished(config: AppConfig, roomId: string, status: CallStatus): vo
   // Defer so the call screen finishes its own status handler before being torn down.
   queueMicrotask(() => {
     if (status.kind === 'full') {
-      show((c) => mountMessage(c, { title: 'This call is full', body: 'Meets calls are 1:1 and two people are already in this one.', actions: [home] }));
+      show((c) => mountMessage(c, { title: 'This call is full', body: 'Orbit calls are 1:1 and two people are already in this one.', actions: [home] }));
     } else if (status.kind === 'error') {
       show((c) => mountMessage(c, { title: 'Could not join the call', body: status.message, actions: [rejoin, home] }));
     } else {
@@ -69,5 +69,5 @@ function showFinished(config: AppConfig, roomId: string, status: CallStatus): vo
 }
 
 window.addEventListener('popstate', route);
-window.addEventListener('meets:navigate', route);
+window.addEventListener('orbit:navigate', route);
 route();

@@ -1,4 +1,6 @@
-# Meets
+# Orbit
+
+**Live:** <https://orbitcall.netlify.app>
 
 A 1:1 video calling app that runs entirely in the browser. Audio, video, screen
 share and chat flow **peer-to-peer over WebRTC**; [Supabase Realtime](https://supabase.com/docs/guides/realtime)
@@ -65,7 +67,7 @@ Note that `VITE_*` values are bundled into the client; use short-lived TURN cred
 
 | File                  | Responsibility                                                           |
 | --------------------- | ------------------------------------------------------------------------ |
-| `src/signaling.ts`    | Supabase channel "meets:<room>": presence roster + addressed SDP/ICE     |
+| `src/signaling.ts`    | Supabase channel "orbit:<room>": presence roster + addressed SDP/ICE     |
 | `src/roster.ts`       | Who's in the call, who's turned away, who is the "polite" peer           |
 | `src/peer.ts`         | `RTCPeerConnection` with perfect negotiation, data channel, replaceTrack |
 | `src/call-session.ts` | Orchestrates signaling, peer link and local media for the UI             |

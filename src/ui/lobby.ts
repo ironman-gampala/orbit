@@ -12,7 +12,7 @@ export interface LobbyResult {
   videoDeviceId?: string;
 }
 
-const NAME_KEY = 'meets:name';
+const NAME_KEY = 'orbit:name';
 
 export function mountLobby(
   container: HTMLElement,

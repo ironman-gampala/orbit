@@ -54,7 +54,7 @@ export class SupabaseSignaling implements Signaling {
     const { url, anonKey, roomId, selfId, handlers } = this.opts;
     const client = getClient(url, anonKey);
 
-    const channel = client.channel(`meets:${roomId}`, {
+    const channel = client.channel(`orbit:${roomId}`, {
       config: { broadcast: { self: false, ack: false }, presence: { key: selfId } },
     });
     this.channel = channel;
