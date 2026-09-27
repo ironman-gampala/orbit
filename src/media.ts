@@ -8,6 +8,8 @@ export interface MediaRequest {
   video: boolean;
   audioDeviceId?: string;
   videoDeviceId?: string;
+  /** Treat the device ids as preferences (e.g. remembered from last time) rather than requirements. */
+  preferDevices?: boolean;
 }
 
 export interface AcquiredMedia {
@@ -24,18 +26,23 @@ export async function listDevices(): Promise<DeviceLists> {
   };
 }
 
-export function audioConstraints(deviceId?: string): MediaTrackConstraints {
+function deviceConstraint(deviceId: string | undefined, exact: boolean): ConstrainDOMString | undefined {
+  if (!deviceId) return undefined;
+  return exact ? { exact: deviceId } : { ideal: deviceId };
+}
+
+export function audioConstraints(deviceId?: string, exact = true): MediaTrackConstraints {
   return {
-    deviceId: deviceId ? { exact: deviceId } : undefined,
+    deviceId: deviceConstraint(deviceId, exact),
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
   };
 }
 
-export function videoConstraints(deviceId?: string): MediaTrackConstraints {
+export function videoConstraints(deviceId?: string, exact = true): MediaTrackConstraints {
   return {
-    deviceId: deviceId ? { exact: deviceId } : undefined,
+    deviceId: deviceConstraint(deviceId, exact),
     width: { ideal: 1280 },
     height: { ideal: 720 },
     frameRate: { ideal: 30 },
@@ -72,8 +79,9 @@ export async function acquireMedia(req: MediaRequest): Promise<AcquiredMedia> {
   }
   if (!req.audio && !req.video) return { stream: new MediaStream() };
 
-  const audio = req.audio ? audioConstraints(req.audioDeviceId) : false;
-  const video = req.video ? videoConstraints(req.videoDeviceId) : false;
+  const exact = !req.preferDevices;
+  const audio = req.audio ? audioConstraints(req.audioDeviceId, exact) : false;
+  const video = req.video ? videoConstraints(req.videoDeviceId, exact) : false;
 
   let firstError: unknown;
   try {

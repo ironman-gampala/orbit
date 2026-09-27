@@ -124,6 +124,16 @@ try {
     const leaver = people.pop();
     await leaver.page.click('.round-btn.danger');
     await leaver.page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Download transcript'), { timeout: 10000 });
+    const home = await leaver.page.$$eval('button', (bs) => bs.findIndex((b) => b.textContent === 'Return to home screen'));
+    await (await leaver.page.$$('button'))[home].click();
+    await leaver.page.waitForFunction(
+      (name) => {
+        const item = [...document.querySelectorAll('.recent')].find((li) => li.querySelector('strong')?.textContent === name);
+        return item && item.querySelector('[aria-label^="Download transcript"]');
+      },
+      { timeout: 10000 },
+      room,
+    );
     await leaver.browser.close();
     await Promise.all(people.map((p) => remoteVideosPlaying(p.page, people.length - 1, 20000)));
     await Promise.all(people.map((p) => waitForStatus(p.page, people.length > 1 ? 'connected' : 'waiting', 10000)));

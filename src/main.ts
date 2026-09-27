@@ -1,8 +1,9 @@
 import './style.css';
 import { loadConfig, type AppConfig } from './config';
 import type { CallStatus } from './call-session';
-import { roomFromLocation } from './room';
+import { roomFromLocation, roomKey } from './room';
 import { ROOM_CAPACITY } from './roster';
+import { store } from './storage';
 import { downloadText } from './transcript';
 import { mountCall, type CallSummary } from './ui/call';
 import { h, navigate, type Cleanup } from './ui/dom';
@@ -51,8 +52,27 @@ function showLobby(config: AppConfig, roomId: string): void {
 }
 
 function showCall(config: AppConfig, roomId: string, lobby: LobbyResult): void {
+  const known = store.recentRooms().some((r) => roomKey(r.name) === roomKey(roomId));
+  store.recordVisit(roomId);
   show((c) =>
-    mountCall(c, { config, roomId, lobby, onFinished: (status, summary) => showFinished(config, roomId, status, summary) }),
+    mountCall(c, {
+      config,
+      roomId,
+      lobby,
+      onFinished: (status, summary) => {
+        // A room we never got into shouldn't clutter the recent list.
+        if (status.kind === 'full') {
+          if (!known) store.removeRoom(roomId);
+        } else {
+          store.recordCallEnd(roomId, {
+            durationMs: summary.endedAt - summary.startedAt,
+            people: summary.peakParticipants,
+            transcript: summary.transcript,
+          });
+        }
+        showFinished(config, roomId, status, summary);
+      },
+    }),
   );
 }
 

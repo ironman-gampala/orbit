@@ -2,6 +2,7 @@ import { acquireCamera, acquireMedia, acquireMicrophone, createLevelMeter, descr
 import { MAX_NAME_LENGTH } from '../messages';
 import { roomUrl } from '../room';
 import { attachStream, copyText, h, icon, initials, navigate, showToast, type Cleanup } from './dom';
+import { store } from '../storage';
 import { renderBrand } from './landing';
 
 export interface LobbyResult {
@@ -12,17 +13,16 @@ export interface LobbyResult {
   videoDeviceId?: string;
 }
 
-const NAME_KEY = 'orbit:name';
-
 export function mountLobby(
   container: HTMLElement,
   opts: { roomId: string; onJoin(result: LobbyResult): void },
 ): Cleanup {
+  const prefs = store.getDevicePrefs();
   let stream = new MediaStream();
-  let micOn = true;
-  let camOn = true;
-  let audioDeviceId: string | undefined;
-  let videoDeviceId: string | undefined;
+  let micOn = prefs.micOn ?? true;
+  let camOn = prefs.camOn ?? true;
+  let audioDeviceId = prefs.audioDeviceId;
+  let videoDeviceId = prefs.videoDeviceId;
   let stopMeter: (() => void) | null = null;
   let handedOff = false;
   let disposed = false;
@@ -43,7 +43,7 @@ export function mountLobby(
     maxLength: MAX_NAME_LENGTH,
     placeholder: 'Your name',
     'aria-label': 'Your name',
-    value: localStorage.getItem(NAME_KEY) ?? '',
+    value: store.getName(),
   });
   const cameraSelect = h('select', { class: 'input', 'aria-label': 'Camera' });
   const micSelect = h('select', { class: 'input', 'aria-label': 'Microphone' });
@@ -242,16 +242,19 @@ export function mountLobby(
   function join() {
     if (joinButton.disabled) return;
     const name = nameInput.value.trim().slice(0, MAX_NAME_LENGTH) || 'Guest';
-    localStorage.setItem(NAME_KEY, name);
+    if (nameInput.value.trim()) store.setName(name);
+    store.setDevicePrefs({ audioDeviceId, videoDeviceId, micOn, camOn: camOn && !!stream.getVideoTracks()[0] });
     handedOff = true;
     opts.onJoin({ name, stream, micOn, audioDeviceId, videoDeviceId });
   }
 
   (async () => {
-    const result = await acquireMedia({ audio: true, video: true });
+    const result = await acquireMedia({ audio: true, video: camOn, audioDeviceId, videoDeviceId, preferDevices: true });
     if (disposed) return stopStream(result.stream);
     stream = result.stream;
-    camOn = stream.getVideoTracks().length > 0;
+    camOn = camOn && stream.getVideoTracks().length > 0;
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) audioTrack.enabled = micOn;
     setWarning(result.warning);
     await refreshDevices();
     restartMeter();
