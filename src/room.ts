@@ -1,6 +1,7 @@
-// No 0/o/1/l/i so codes survive being read aloud or retyped.
+// No 0/o/1/l/i so generated codes survive being read aloud or retyped.
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
-const ROOM_ID_PATTERN = /^[a-z0-9]{3,4}(-[a-z0-9]{3,4}){2}$/;
+
+export const MAX_ROOM_NAME_LENGTH = 60;
 
 function randomChars(count: number, random: () => number): string {
   let out = '';
@@ -8,33 +9,50 @@ function randomChars(count: number, random: () => number): string {
   return out;
 }
 
-/** Meet-style code, e.g. `abc-defg-hjk`. */
+/** Meet-style code, e.g. `abc-defg-hjk`, used when the user doesn't pick a name. */
 export function generateRoomId(random: () => number = Math.random): string {
   return [randomChars(3, random), randomChars(4, random), randomChars(3, random)].join('-');
 }
 
-export function normalizeRoomId(input: string): string | null {
+/**
+ * Any name or number works as a room: "Design sync", "4021", "Kaushik's room".
+ * Pasted Orbit links resolve to their room. Whitespace is collapsed, invisible
+ * control characters are dropped and the length is capped.
+ */
+export function normalizeRoomName(input: string): string | null {
   let value = input.trim();
-  try {
-    const url = new URL(value);
-    value = url.searchParams.get('room') ?? '';
-  } catch {
-    // Not a URL; treat as a bare code.
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const room = new URL(value).searchParams.get('room');
+      if (room === null) return null;
+      value = room;
+    } catch {
+      return null;
+    }
   }
-  value = value.toLowerCase().replace(/\s+/g, '');
-  return ROOM_ID_PATTERN.test(value) ? value : null;
+  value = value.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').trim();
+  if (!value) return null;
+  return Array.from(value).slice(0, MAX_ROOM_NAME_LENGTH).join('').trim();
 }
 
-export function roomIdFromLocation(location: Location = window.location): string | null {
+/** Rooms match case-insensitively, so "Team Sync" and "team sync" meet in the same place. */
+export function roomKey(name: string): string {
+  return name.normalize('NFC').toLowerCase();
+}
+
+export function roomSearch(name: string): string {
+  return `?${new URLSearchParams({ room: name })}`;
+}
+
+export function roomFromLocation(location: Location = window.location): string | null {
   const room = new URLSearchParams(location.search).get('room');
-  return room ? normalizeRoomId(room) : null;
+  return room ? normalizeRoomName(room) : null;
 }
 
-export function roomUrl(roomId: string, location: Location = window.location): string {
+export function roomUrl(name: string, location: Location = window.location): string {
   const url = new URL(location.href);
-  url.search = '';
+  url.search = roomSearch(name);
   url.hash = '';
-  url.searchParams.set('room', roomId);
   return url.toString();
 }
 

@@ -1,8 +1,11 @@
 import './style.css';
 import { loadConfig, type AppConfig } from './config';
 import type { CallStatus } from './call-session';
-import { roomIdFromLocation } from './room';
-import { mountCall } from './ui/call';
+import { roomFromLocation, roomKey } from './room';
+import { ROOM_CAPACITY } from './roster';
+import { store } from './storage';
+import { downloadText } from './transcript';
+import { mountCall, type CallSummary } from './ui/call';
 import { h, navigate, type Cleanup } from './ui/dom';
 import { mountLanding } from './ui/landing';
 import { mountLobby, type LobbyResult } from './ui/lobby';
@@ -25,7 +28,7 @@ function route(): void {
         body: h(
           'div',
           {},
-          h('p', {}, 'Orbit uses Supabase Realtime to let two browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
+          h('p', {}, 'Orbit uses Supabase Realtime to let browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
           h('pre', {}, result.missing.map((k) => `${k}=...`).join('\n')),
           h('p', {}, 'See the README for step-by-step setup.'),
         ),
@@ -34,7 +37,7 @@ function route(): void {
     return;
   }
 
-  const roomId = roomIdFromLocation();
+  const roomId = roomFromLocation();
   if (!roomId) {
     if (new URLSearchParams(location.search).has('room')) history.replaceState(null, '', location.pathname);
     show(mountLanding);
@@ -49,21 +52,59 @@ function showLobby(config: AppConfig, roomId: string): void {
 }
 
 function showCall(config: AppConfig, roomId: string, lobby: LobbyResult): void {
-  show((c) => mountCall(c, { config, roomId, lobby, onFinished: (status) => showFinished(config, roomId, status) }));
+  const known = store.recentRooms().some((r) => roomKey(r.name) === roomKey(roomId));
+  store.recordVisit(roomId);
+  show((c) =>
+    mountCall(c, {
+      config,
+      roomId,
+      lobby,
+      onFinished: (status, summary) => {
+        // A room we never got into shouldn't clutter the recent list.
+        if (status.kind === 'full') {
+          if (!known) store.removeRoom(roomId);
+        } else {
+          store.recordCallEnd(roomId, {
+            durationMs: summary.endedAt - summary.startedAt,
+            people: summary.peakParticipants,
+            transcript: summary.transcript,
+          });
+        }
+        showFinished(config, roomId, status, summary);
+      },
+    }),
+  );
 }
 
-function showFinished(config: AppConfig, roomId: string, status: CallStatus): void {
+function showFinished(config: AppConfig, roomId: string, status: CallStatus, summary: CallSummary): void {
   const home = { label: 'Return to home screen', onClick: () => navigate('') };
   const rejoin = { label: 'Rejoin', primary: true, onClick: () => showLobby(config, roomId) };
+  const transcript = summary.transcript;
+  const download = transcript && {
+    label: 'Download transcript',
+    onClick: () => downloadText(transcript.filename, transcript.text),
+  };
 
   // Defer so the call screen finishes its own status handler before being torn down.
   queueMicrotask(() => {
     if (status.kind === 'full') {
-      show((c) => mountMessage(c, { title: 'This call is full', body: 'Orbit calls are 1:1 and two people are already in this one.', actions: [home] }));
+      show((c) =>
+        mountMessage(c, {
+          title: 'This room is full',
+          body: `Orbit rooms hold up to ${ROOM_CAPACITY} people and this one is at capacity. Try again in a bit or start a new room.`,
+          actions: [rejoin, home],
+        }),
+      );
     } else if (status.kind === 'error') {
       show((c) => mountMessage(c, { title: 'Could not join the call', body: status.message, actions: [rejoin, home] }));
     } else {
-      show((c) => mountMessage(c, { title: 'You left the call', actions: [rejoin, home] }));
+      show((c) =>
+        mountMessage(c, {
+          title: 'You left the call',
+          body: transcript ? 'Your transcript is ready and saved on this device. Download it now or later from the home screen.' : undefined,
+          actions: download ? [rejoin, download, home] : [rejoin, home],
+        }),
+      );
     }
   });
 }

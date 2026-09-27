@@ -1,7 +1,10 @@
+import type { VideoEncoding } from './bandwidth';
 import { decodeMessage, encodeMessage, type PeerMessage } from './messages';
 import type { SignalPayload } from './signaling';
 
 type Kind = 'audio' | 'video';
+
+const CANDIDATE_BATCH_MS = 150;
 
 export interface PeerLinkOptions {
   polite: boolean;
@@ -33,6 +36,9 @@ export class PeerLink {
   private ignoreOffer = false;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private candidateTimer: number | undefined;
+  private videoEncoding: VideoEncoding | null = null;
 
   constructor(private readonly opts: PeerLinkOptions) {
     this.desired = { ...opts.localTracks };
@@ -52,11 +58,17 @@ export class PeerLink {
     };
 
     pc.onicecandidate = ({ candidate }) => {
-      if (candidate) this.opts.sendSignal({ kind: 'candidate', candidate: candidate.toJSON() });
+      if (!candidate) {
+        this.flushCandidates();
+        return;
+      }
+      this.pendingCandidates.push(candidate.toJSON());
+      this.candidateTimer ??= window.setTimeout(() => this.flushCandidates(), CANDIDATE_BATCH_MS);
     };
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') pc.restartIce();
+      if (pc.connectionState === 'connected') void this.applyVideoEncoding();
       this.opts.onConnectionState(pc.connectionState);
     };
 
@@ -92,6 +104,11 @@ export class PeerLink {
     if (transceiver) await transceiver.sender.replaceTrack(track);
   }
 
+  setVideoEncoding(encoding: VideoEncoding): void {
+    this.videoEncoding = encoding;
+    void this.applyVideoEncoding();
+  }
+
   send(message: PeerMessage): boolean {
     if (this.channel?.readyState !== 'open') return false;
     this.channel.send(encodeMessage(message));
@@ -101,8 +118,32 @@ export class PeerLink {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    window.clearTimeout(this.candidateTimer);
     this.channel?.close();
     this.pc.close();
+  }
+
+  private flushCandidates(): void {
+    window.clearTimeout(this.candidateTimer);
+    this.candidateTimer = undefined;
+    if (!this.pendingCandidates.length || this.closed) return;
+    this.opts.sendSignal({ kind: 'candidates', candidates: this.pendingCandidates });
+    this.pendingCandidates = [];
+  }
+
+  /** Senders only accept encoding parameters once negotiated, so this is retried on connect. */
+  private async applyVideoEncoding(): Promise<void> {
+    const sender = this.transceiverFor('video')?.sender;
+    if (!sender || !this.videoEncoding || this.closed) return;
+    const params = sender.getParameters();
+    const [encoding] = params.encodings ?? [];
+    if (!encoding) return;
+    Object.assign(encoding, this.videoEncoding);
+    try {
+      await sender.setParameters(params);
+    } catch (err) {
+      console.warn('[peer] could not apply video encoding', err);
+    }
   }
 
   private async processSignal(payload: SignalPayload): Promise<void> {
@@ -124,9 +165,11 @@ export class PeerLink {
       return;
     }
 
-    if (payload.kind === 'candidate') {
+    const candidates =
+      payload.kind === 'candidates' ? payload.candidates : payload.kind === 'candidate' ? [payload.candidate] : [];
+    for (const candidate of candidates) {
       try {
-        await pc.addIceCandidate(payload.candidate);
+        await pc.addIceCandidate(candidate);
       } catch (err) {
         if (!this.ignoreOffer) throw err;
       }

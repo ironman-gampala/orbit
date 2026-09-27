@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "node e2e/call.e2e.mjs",
+    "e2e:group": "node e2e/group.e2e.mjs",
     "screenshots": "node e2e/screenshots.mjs"
   },
   "dependencies": {
