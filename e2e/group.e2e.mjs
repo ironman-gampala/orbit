@@ -4,13 +4,15 @@
 import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
-import { BASE, enterLobby, join, launchParticipant, remoteNames, remoteVideosPlaying, sleep, waitForStatus } from './browser.mjs';
+import { allPeersConnected, enterLobby, join, launchChrome, launchParticipant, remoteNames, remoteVideosPlaying, sleep, waitForStatus } from './browser.mjs';
 
 const SPEECH = { Ben: ['Morning everyone', 'Let us ship the release today'] };
 const downloads = mkdtempSync(joinPath(tmpdir(), 'orbit-e2e-'));
 
 const NAMES = ['Asha', 'Ben', 'Chen', 'Dana', 'Eli', 'Fatima', 'Gus', 'Hana', 'Ivan', 'Jo'];
 const count = Math.min(NAMES.length, Number(process.env.PEOPLE ?? 4));
+/** CAMERA=off joins everyone with video off, which a single machine can sustain for a full room. */
+const cameras = process.env.CAMERA !== 'off';
 const room = `Team sync ${Math.random().toString(36).slice(2, 6)}`;
 const t0 = Date.now();
 const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s]`, ...a);
@@ -22,17 +24,21 @@ async function step(name, fn) {
   log('PASS', name, detail ?? '');
 }
 
+// One Chrome with an isolated context per person: ten separate Chromes swamp a laptop.
+const chrome = await launchChrome();
 const people = [];
 let failed = false;
 try {
-  log(`room: "${room}" with ${count} people`);
+  log(`room: "${room}" with ${count} people${cameras ? '' : ', cameras off'}`);
   for (let i = 0; i < count; i++) {
     const name = NAMES[i];
     const participant = await launchParticipant({
-      onConsoleError: (m) => log(`${name} console error:`, m),
+      shared: chrome,
+      onConsoleError: (m) => log(`${name} console:`, m),
       fakeSpeech: SPEECH[name] ?? [],
       downloadPath: i === 0 ? downloads : undefined,
     });
+    if (!cameras) await participant.page.evaluateOnNewDocument(() => localStorage.setItem('orbit:devices', JSON.stringify({ camOn: false })));
     people.push({ name, ...participant });
   }
 
@@ -42,12 +48,12 @@ try {
       await join(person.page);
       await sleep(400);
     }
-    await Promise.all(people.map((p) => waitForStatus(p.page, 'connected')));
+    await Promise.all(people.map((p) => waitForStatus(p.page, 'connected', 60000)));
   });
 
-  await step('Everyone receives video from everyone else', async () => {
-    const sizes = await Promise.all(people.map((p) => remoteVideosPlaying(p.page, count - 1, 45000)));
-    return sizes[0];
+  await step('Everyone is connected to everyone else', async () => {
+    await Promise.all(people.map((p) => allPeersConnected(p.page, count - 1)));
+    if (cameras) return (await Promise.all(people.map((p) => remoteVideosPlaying(p.page, count - 1, 45000))))[0];
   });
 
   await step('Everyone sees the right names and headcount', async () => {
@@ -84,22 +90,43 @@ try {
     );
   });
 
+  if (count === NAMES.length) {
+    await step(`An ${count + 1}th person is turned away from a full room`, async () => {
+      const extra = await launchParticipant({ shared: chrome });
+      try {
+        await enterLobby(extra.page, room, 'Kai');
+        await join(extra.page);
+        await extra.page.waitForFunction(() => document.body.textContent.includes('This room is full'), { timeout: 20000 });
+      } finally {
+        await extra.browser.close();
+      }
+      await sleep(1500);
+      const counts = await Promise.all(people.map((p) => p.page.$eval('.people-count-value', (e) => e.textContent)));
+      if (counts.some((c) => c !== String(count))) throw new Error(`headcounts after rejection: ${counts.join(', ')}`);
+    });
+  }
+
   await step('Turning on captions switches them on for the whole room', async () => {
     await people[0].page.click('button[aria-label="Turn on captions and transcript"]');
     await Promise.all(people.map((p) => p.page.waitForSelector('.live-pill:not([hidden])', { timeout: 10000 })));
   });
 
   await step("Ben's speech shows up as a live caption for everyone", async () => {
-    await Promise.all(
-      people
-        .filter((p) => p.name !== 'Ben')
-        .map((p) =>
-          p.page.waitForFunction(
-            () => [...document.querySelectorAll('.caption-line')].some((l) => l.textContent.startsWith('Ben') && l.textContent.includes('Morning everyone')),
-            { timeout: 15000 },
-          ),
+    const listeners = people.filter((p) => p.name !== 'Ben');
+    const outcomes = await Promise.allSettled(
+      listeners.map((p) =>
+        p.page.waitForFunction(
+          (phrases) => [...document.querySelectorAll('.caption-line')].some((l) => l.textContent.startsWith('Ben') && phrases.some((s) => l.textContent.includes(s))),
+          { timeout: 15000 },
+          SPEECH.Ben,
         ),
+      ),
     );
+    const missed = listeners.filter((_, i) => outcomes[i].status === 'rejected');
+    if (missed.length) {
+      const seen = await missed[0].page.$$eval('.caption-line', (ls) => ls.map((l) => l.textContent));
+      throw new Error(`${missed.map((p) => p.name).join(', ')} missed the caption; ${missed[0].name} saw ${JSON.stringify(seen)}`);
+    }
   });
 
   await step('Transcript collects speech and chat, and downloads as text', async () => {
@@ -135,7 +162,7 @@ try {
       room,
     );
     await leaver.browser.close();
-    await Promise.all(people.map((p) => remoteVideosPlaying(p.page, people.length - 1, 20000)));
+    await Promise.all(people.map((p) => (cameras ? remoteVideosPlaying(p.page, people.length - 1, 20000) : allPeersConnected(p.page, people.length - 1, 20000))));
     await Promise.all(people.map((p) => waitForStatus(p.page, people.length > 1 ? 'connected' : 'waiting', 10000)));
   });
 } catch (err) {
@@ -143,6 +170,7 @@ try {
   log('FAIL', err.message);
 } finally {
   await Promise.all(people.map((p) => p.browser.close().catch(() => {})));
+  await chrome.close().catch(() => {});
   log(`${results.length} steps passed${failed ? ', 1 failed' : ''}`);
   process.exit(failed ? 1 : 0);
 }

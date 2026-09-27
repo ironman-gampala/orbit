@@ -1,65 +1,106 @@
-// Regenerates docs/screenshots from a live deployment.
-// Usage: npm run screenshots
-import { mkdirSync } from 'node:fs';
+// Regenerates docs/screenshots from a live deployment with a four-person call.
+// Usage: npm run screenshots            (BASE_URL defaults to https://orbitcall.netlify.app)
+import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { BASE, enterLobby, join, launchParticipant, randomRoom, sleep, waitForStatus } from './browser.mjs';
+import { BASE, enterLobby, join, launchParticipant, remoteVideosPlaying, sleep, waitForStatus } from './browser.mjs';
 
 const OUT = fileURLToPath(new URL('../docs/screenshots/', import.meta.url));
 mkdirSync(OUT, { recursive: true });
-const room = randomRoom();
+for (const file of readdirSync(OUT)) if (file.endsWith('.png')) rmSync(`${OUT}${file}`);
 
-const shot = async (page, name) => {
+const room = 'Launch review';
+const desktop = { width: 1280, height: 800, deviceScaleFactor: 2 };
+const mobile = { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true };
+
+const shot = async (page, name, opts = {}) => {
   await sleep(600);
-  await page.screenshot({ path: `${OUT}${name}.png` });
+  await page.screenshot({ path: `${OUT}${name}.png`, ...opts });
   console.log('saved', name);
 };
 
-const alice = await launchParticipant({ viewport: { width: 1280, height: 800, deviceScaleFactor: 2 } });
-const bob = await launchParticipant({ viewport: { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true } });
+const now = Date.now();
+const seededRooms = [
+  { name: 'Design sync', firstJoinedAt: now - 9e8, lastJoinedAt: now - 25 * 60e3, visits: 6, lastDurationMs: 42 * 60e3, lastPeople: 5, transcriptId: 'seed' },
+  { name: '4021', firstJoinedAt: now - 9e7, lastJoinedAt: now - 26 * 3600e3, visits: 2, lastDurationMs: 18 * 60e3, lastPeople: 2 },
+  { name: 'Friday retro', firstJoinedAt: now - 5e8, lastJoinedAt: now - 3 * 86400e3, visits: 3, lastDurationMs: 65 * 60e3, lastPeople: 8 },
+];
+const seededTranscripts = [{ id: 'seed', room: 'Design sync', filename: 'Design sync.txt', text: 'Orbit transcript', savedAt: now }];
+
+async function seedHome(page, name) {
+  await page.goto(BASE, { waitUntil: 'networkidle2' });
+  await page.evaluate(
+    (rooms, transcripts, n) => {
+      localStorage.setItem('orbit:recent-rooms', JSON.stringify(rooms));
+      localStorage.setItem('orbit:transcripts', JSON.stringify(transcripts));
+      localStorage.setItem('orbit:name', n);
+    },
+    seededRooms,
+    seededTranscripts,
+    name,
+  );
+  await page.reload({ waitUntil: 'networkidle2' });
+}
+
+const cast = [
+  { name: 'Asha Rao', viewport: desktop, speech: ['Love it. I will share the notes right after this.'] },
+  { name: 'Ben Carter', viewport: { width: 1280, height: 800 }, speech: ['Morning everyone, the new build is live.', 'Let us walk through the release checklist.'] },
+  { name: 'Chen Li', viewport: { width: 1280, height: 800 }, speech: [] },
+  { name: 'Dana Kim', viewport: mobile, speech: [] },
+];
+const people = [];
 
 try {
-  await alice.page.goto(BASE, { waitUntil: 'networkidle2' });
-  await shot(alice.page, '01-landing');
+  for (const person of cast) {
+    people.push({ ...person, ...(await launchParticipant({ viewport: person.viewport, fakeSpeech: person.speech })) });
+  }
+  const [asha, ben, chen, dana] = people;
 
-  await enterLobby(alice.page, room, 'Alice');
+  await seedHome(asha.page, asha.name);
+  await shot(asha.page, '01-home');
+  await seedHome(dana.page, dana.name);
+  await shot(dana.page, '02-home-mobile', { fullPage: true });
+
+  await enterLobby(asha.page, room, asha.name);
   await sleep(1500);
-  await shot(alice.page, '02-lobby');
+  await shot(asha.page, '03-lobby');
 
-  await join(alice.page);
-  await waitForStatus(alice.page, 'waiting', 20000);
-  await shot(alice.page, '03-waiting');
+  await join(asha.page);
+  await waitForStatus(asha.page, 'waiting', 20000);
+  await shot(asha.page, '04-waiting');
 
-  await enterLobby(bob.page, room, 'Bob');
-  await join(bob.page);
-  await Promise.all([waitForStatus(alice.page, 'connected'), waitForStatus(bob.page, 'connected')]);
-  await alice.page.waitForFunction(() => document.querySelector('.stage .name-tag-text')?.textContent === 'Bob', { timeout: 10000 });
-  await sleep(3500);
-  await shot(alice.page, '04-in-call');
-  await shot(bob.page, '08-mobile-call');
+  for (const person of [ben, chen, dana]) {
+    await enterLobby(person.page, room, person.name);
+    await join(person.page);
+    await sleep(400);
+  }
+  await Promise.all(people.map((p) => waitForStatus(p.page, 'connected')));
+  await remoteVideosPlaying(asha.page, 3, 45000);
+  await remoteVideosPlaying(dana.page, 3, 45000);
+  await sleep(4500); // let the join toasts fade
+  await shot(asha.page, '05-group-call');
+  await shot(dana.page, '06-mobile-call');
 
-  await bob.page.click('button[aria-label="Chat with everyone"]');
-  await bob.page.type('.chat-input', 'Hey Alice! Can you see my screen share next?');
-  await bob.page.keyboard.press('Enter');
-  await alice.page.click('button[aria-label="Chat with everyone"]');
-  await alice.page.waitForFunction(() => document.querySelector('.chat-list')?.textContent.includes('Hey Alice'), { timeout: 10000 });
-  await alice.page.type('.chat-input', 'Yep, loud and clear. Go ahead.');
-  await alice.page.keyboard.press('Enter');
-  await bob.page.waitForFunction(() => document.querySelector('.chat-list')?.textContent.includes('loud and clear'), { timeout: 10000 });
-  await shot(alice.page, '05-chat');
-  await alice.page.click('button[aria-label="Close chat"]');
-  await bob.page.click('button[aria-label="Close chat"]');
+  await asha.page.click('button[aria-label="Turn on captions and transcript"]');
+  await asha.page.waitForFunction(() => document.querySelectorAll('.caption-line').length >= 2, { timeout: 15000 });
+  await shot(asha.page, '07-live-captions');
 
-  await bob.page.click('.call-controls .round-btn:nth-child(1)');
-  await bob.page.click('.call-controls .round-btn:nth-child(2)');
-  await alice.page.waitForSelector('.stage.video-off', { timeout: 10000 });
-  await alice.page.waitForFunction(() => document.querySelector('.stage .badge-muted')?.hidden === false, { timeout: 10000 });
-  await shot(alice.page, '06-remote-camera-off');
+  await ben.page.click('button[aria-label="Chat with everyone"]');
+  await ben.page.type('.chat-input', 'Checklist is in the doc. Shout if anything is missing!');
+  await ben.page.keyboard.press('Enter');
+  await asha.page.waitForFunction(() => document.querySelector('.transcript-list')?.textContent.includes('release checklist'), { timeout: 15000 });
+  await sleep(4500);
+  await asha.page.click('button[aria-label="Open transcript"]');
+  await shot(asha.page, '08-transcript');
 
-  await alice.page.click('.round-btn.danger');
-  await alice.page.waitForFunction(() => document.body.textContent.includes('You left the call'), { timeout: 10000 });
-  await shot(alice.page, '07-left-call');
+  await asha.page.click('.tabs .tab:first-child');
+  await asha.page.type('.chat-input', 'Looks complete to me. Shipping it.');
+  await asha.page.keyboard.press('Enter');
+  await shot(asha.page, '09-chat');
+
+  await asha.page.click('.round-btn.danger');
+  await asha.page.waitForFunction(() => document.body.textContent.includes('Download transcript'), { timeout: 10000 });
+  await shot(asha.page, '10-left-call');
 } finally {
-  await alice.browser.close().catch(() => {});
-  await bob.browser.close().catch(() => {});
+  await Promise.all(people.map((p) => p.browser.close().catch(() => {})));
   process.exit(0);
 }

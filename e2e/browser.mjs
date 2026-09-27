@@ -53,27 +53,40 @@ function installFakeSpeech(phrases) {
   window.webkitSpeechRecognition = FakeRecognition;
 }
 
-/** Separate Chrome instance per participant, with Chrome's synthetic camera + mic. */
-export async function launchParticipant({ viewport = { width: 1280, height: 800 }, onConsoleError, fakeSpeech, downloadPath } = {}) {
-  const browser = await puppeteer.launch({
+export function launchChrome(viewport = { width: 1280, height: 800 }) {
+  return puppeteer.launch({
     executablePath: CHROME,
     headless: true,
     args: [
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
       '--autoplay-policy=no-user-gesture-required',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
       '--no-first-run',
     ],
     defaultViewport: viewport,
   });
+}
+
+/**
+ * A participant with Chrome's synthetic camera + mic. By default each gets its own
+ * Chrome; pass `shared` to use an isolated context in one Chrome instead, which
+ * lets a single machine host a full room. The returned `browser` is whatever
+ * should be closed to make that participant leave.
+ */
+export async function launchParticipant({ viewport = { width: 1280, height: 800 }, onConsoleError, fakeSpeech, downloadPath, shared } = {}) {
+  const browser = shared ? await shared.createBrowserContext() : await launchChrome(viewport);
   const page = await browser.newPage();
+  if (shared) await page.setViewport(viewport);
   if (fakeSpeech) await page.evaluateOnNewDocument(installFakeSpeech, fakeSpeech);
   if (downloadPath) {
     const cdp = await page.createCDPSession();
-    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath });
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath, ...(shared && { browserContextId: browser.id }) });
   }
   if (onConsoleError) {
-    page.on('console', (m) => m.type() === 'error' && onConsoleError(m.text()));
+    page.on('console', (m) => ['error', 'warn', 'warning'].includes(m.type()) && onConsoleError(m.text()));
     page.on('pageerror', (e) => onConsoleError(e.message));
   }
   return { browser, page };
@@ -106,6 +119,17 @@ export const remoteVideosPlaying = (page, count, timeout = 30000) =>
       count,
     )
     .then(() => page.$$eval('.remote-tile .tile-video', (vs) => vs.map((v) => `${v.videoWidth}x${v.videoHeight}`).join(', ')));
+
+/** Resolves once `count` remote tiles report a live peer connection. */
+export const allPeersConnected = (page, count, timeout = 60000) =>
+  page.waitForFunction(
+    (n) => {
+      const tiles = [...document.querySelectorAll('.remote-tile')];
+      return tiles.length === n && tiles.every((t) => t.dataset.connection === 'connected');
+    },
+    { timeout },
+    count,
+  );
 
 export const remoteNames = (page) =>
   page.$$eval('.remote-tile .name-tag-text', (els) => els.map((e) => e.textContent).sort());
