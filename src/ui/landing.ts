@@ -36,7 +36,7 @@ export function mountLanding(container: HTMLElement): Cleanup {
     maxLength: 500,
     title: `Up to ${MAX_ROOM_NAME_LENGTH} characters`,
   });
-  const joinButton = h('button', { class: 'btn btn-text', type: 'submit', disabled: true }, COPY.join);
+  const joinButton = h('button', { class: 'btn btn-join', type: 'submit', disabled: true }, COPY.join);
   const syncJoin = () => (joinButton.disabled = !normalizeRoomName(input.value));
   input.addEventListener('input', syncJoin);
 
@@ -53,21 +53,6 @@ export function mountLanding(container: HTMLElement): Cleanup {
     input,
     joinButton,
   );
-
-  const suggestion = (label: string) =>
-    h(
-      'button',
-      {
-        class: 'chip',
-        type: 'button',
-        onClick: () => {
-          input.value = label;
-          syncJoin();
-          input.focus();
-        },
-      },
-      label,
-    );
 
   // Clock
   const clock = h('span', { class: 'topbar-clock' });
@@ -194,14 +179,6 @@ export function mountLanding(container: HTMLElement): Cleanup {
             COPY.newRoom,
           ),
           form,
-        ),
-        h(
-          'p',
-          { class: 'hint' },
-          COPY.hintLead,
-          suggestion(COPY.suggestions[0]),
-          COPY.hintJoiner,
-          suggestion(COPY.suggestions[1]),
         ),
         h('p', { class: 'privacy-note' }, icon('lock'), COPY.privacy),
       ),
