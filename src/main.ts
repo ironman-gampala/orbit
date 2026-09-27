@@ -1,0 +1,73 @@
+import './style.css';
+import { loadConfig, type AppConfig } from './config';
+import type { CallStatus } from './call-session';
+import { roomIdFromLocation } from './room';
+import { mountCall } from './ui/call';
+import { h, navigate, type Cleanup } from './ui/dom';
+import { mountLanding } from './ui/landing';
+import { mountLobby, type LobbyResult } from './ui/lobby';
+import { mountMessage } from './ui/message-screen';
+
+const app = document.getElementById('app')!;
+let cleanup: Cleanup | null = null;
+
+function show(mount: (container: HTMLElement) => Cleanup): void {
+  cleanup?.();
+  cleanup = mount(app);
+}
+
+function route(): void {
+  const result = loadConfig();
+  if (!result.ok) {
+    show((c) =>
+      mountMessage(c, {
+        title: 'Supabase is not configured',
+        body: h(
+          'div',
+          {},
+          h('p', {}, 'Meets uses Supabase Realtime to let two browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
+          h('pre', {}, result.missing.map((k) => `${k}=...`).join('\n')),
+          h('p', {}, 'See the README for step-by-step setup.'),
+        ),
+      }),
+    );
+    return;
+  }
+
+  const roomId = roomIdFromLocation();
+  if (!roomId) {
+    if (new URLSearchParams(location.search).has('room')) history.replaceState(null, '', location.pathname);
+    show(mountLanding);
+    return;
+  }
+
+  showLobby(result.config, roomId);
+}
+
+function showLobby(config: AppConfig, roomId: string): void {
+  show((c) => mountLobby(c, { roomId, onJoin: (lobby) => showCall(config, roomId, lobby) }));
+}
+
+function showCall(config: AppConfig, roomId: string, lobby: LobbyResult): void {
+  show((c) => mountCall(c, { config, roomId, lobby, onFinished: (status) => showFinished(config, roomId, status) }));
+}
+
+function showFinished(config: AppConfig, roomId: string, status: CallStatus): void {
+  const home = { label: 'Return to home screen', onClick: () => navigate('') };
+  const rejoin = { label: 'Rejoin', primary: true, onClick: () => showLobby(config, roomId) };
+
+  // Defer so the call screen finishes its own status handler before being torn down.
+  queueMicrotask(() => {
+    if (status.kind === 'full') {
+      show((c) => mountMessage(c, { title: 'This call is full', body: 'Meets calls are 1:1 and two people are already in this one.', actions: [home] }));
+    } else if (status.kind === 'error') {
+      show((c) => mountMessage(c, { title: 'Could not join the call', body: status.message, actions: [rejoin, home] }));
+    } else {
+      show((c) => mountMessage(c, { title: 'You left the call', actions: [rejoin, home] }));
+    }
+  });
+}
+
+window.addEventListener('popstate', route);
+window.addEventListener('meets:navigate', route);
+route();
