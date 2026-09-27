@@ -589,8 +589,117 @@ select.input {
   background: var(--surface);
 }
 
-.stage .stage-video {
+.call[data-layout='grid'] .stage,
+.call[data-layout='spotlight'] .stage {
+  background: transparent;
+}
+
+.grid {
+  display: grid;
+  height: 100%;
+  gap: 12px;
+  grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+}
+
+.grid .tile {
+  container-type: size;
+  min-height: 0;
+}
+
+.grid .avatar-lg {
+  width: clamp(36px, 38cqh, 128px);
+  height: clamp(36px, 38cqh, 128px);
+  font-size: clamp(0.9rem, 14cqh, 2.75rem);
+}
+
+.tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 3px solid var(--accent-hover);
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.tile.speaking::after {
+  opacity: 1;
+}
+
+.tile.presenting .tile-video,
+.call[data-layout='pair'] .remote-tile .tile-video {
   object-fit: contain;
+}
+
+.remote-tile[data-connection='connecting'] .tile-video,
+.remote-tile[data-connection='reconnecting'] .tile-video {
+  opacity: 0.5;
+}
+
+.tile-health {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+/* Solo and pair: the self view floats in the corner of the stage. */
+.call[data-layout='solo'] .self-tile,
+.call[data-layout='pair'] .self-tile {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: clamp(160px, 22vw, 280px);
+  aspect-ratio: 16 / 9;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow);
+  z-index: 2;
+}
+
+.call[data-layout='solo'] .grid,
+.call[data-layout='pair'] .grid {
+  gap: 0;
+}
+
+.call[data-layout='pair'] .remote-tile {
+  border-radius: 0;
+  background: var(--surface);
+}
+
+.call[data-layout='spotlight'] .grid {
+  grid-template-columns: minmax(0, 1fr) clamp(160px, 18vw, 260px);
+}
+
+.call[data-layout='spotlight'] .tile {
+  grid-column: 2;
+}
+
+.call[data-layout='spotlight'] .tile.spotlight {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+
+.people-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.people-count .icon {
+  width: 18px;
+  height: 18px;
 }
 
 .stage-overlay {
@@ -650,22 +759,6 @@ select.input {
 .share-link .input {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 0.85rem;
-}
-
-.self-tile {
-  position: absolute;
-  right: 32px;
-  bottom: 16px;
-  width: clamp(160px, 22vw, 280px);
-  aspect-ratio: 16 / 9;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: var(--shadow);
-  z-index: 2;
-  transition: right 0.2s;
-}
-
-.chat-open .self-tile {
-  right: calc(360px + 32px);
 }
 
 .chat-panel {
@@ -948,14 +1041,15 @@ select.input {
     width: 56px;
   }
 
-  .self-tile {
+  .call[data-layout='solo'] .self-tile,
+  .call[data-layout='pair'] .self-tile {
     width: 110px;
     aspect-ratio: 3 / 4;
-    right: 20px;
+    right: 12px;
     bottom: 12px;
   }
 
-  .chat-open .self-tile {
-    right: 20px;
+  .grid {
+    gap: 8px;
   }
 }

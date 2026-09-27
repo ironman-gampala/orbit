@@ -2,6 +2,7 @@ import './style.css';
 import { loadConfig, type AppConfig } from './config';
 import type { CallStatus } from './call-session';
 import { roomFromLocation } from './room';
+import { ROOM_CAPACITY } from './roster';
 import { mountCall } from './ui/call';
 import { h, navigate, type Cleanup } from './ui/dom';
 import { mountLanding } from './ui/landing';
@@ -25,7 +26,7 @@ function route(): void {
         body: h(
           'div',
           {},
-          h('p', {}, 'Orbit uses Supabase Realtime to let two browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
+          h('p', {}, 'Orbit uses Supabase Realtime to let browsers find each other. Add these to a ', h('code', {}, '.env'), ' file and restart the dev server:'),
           h('pre', {}, result.missing.map((k) => `${k}=...`).join('\n')),
           h('p', {}, 'See the README for step-by-step setup.'),
         ),
@@ -59,7 +60,13 @@ function showFinished(config: AppConfig, roomId: string, status: CallStatus): vo
   // Defer so the call screen finishes its own status handler before being torn down.
   queueMicrotask(() => {
     if (status.kind === 'full') {
-      show((c) => mountMessage(c, { title: 'This call is full', body: 'Orbit calls are 1:1 and two people are already in this one.', actions: [home] }));
+      show((c) =>
+        mountMessage(c, {
+          title: 'This room is full',
+          body: `Orbit rooms hold up to ${ROOM_CAPACITY} people and this one is at capacity. Try again in a bit or start a new room.`,
+          actions: [rejoin, home],
+        }),
+      );
     } else if (status.kind === 'error') {
       show((c) => mountMessage(c, { title: 'Could not join the call', body: status.message, actions: [rejoin, home] }));
     } else {

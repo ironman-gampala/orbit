@@ -38,7 +38,7 @@ export async function launchParticipant({ viewport = { width: 1280, height: 800 
 }
 
 export async function enterLobby(page, room, name) {
-  await page.goto(`${BASE}/?room=${room}`, { waitUntil: 'networkidle2' });
+  await page.goto(`${BASE}/?${new URLSearchParams({ room })}`, { waitUntil: 'networkidle2' });
   await page.waitForSelector('.lobby-panel button[type=submit]:not([disabled])', { timeout: 20000 });
   await page.$eval('.lobby-panel input[type=text]', (el) => (el.value = ''));
   await page.type('.lobby-panel input[type=text]', name);
@@ -51,3 +51,19 @@ export async function join(page) {
 
 export const waitForStatus = (page, status, timeout = 40000) =>
   page.waitForSelector(`main.call[data-status="${status}"]`, { timeout });
+
+/** Resolves once `count` remote tiles are each playing video, returning their resolutions. */
+export const remoteVideosPlaying = (page, count, timeout = 30000) =>
+  page
+    .waitForFunction(
+      (n) => {
+        const videos = [...document.querySelectorAll('.remote-tile .tile-video')];
+        return videos.length === n && videos.every((v) => v.videoWidth > 0 && !v.paused);
+      },
+      { timeout },
+      count,
+    )
+    .then(() => page.$$eval('.remote-tile .tile-video', (vs) => vs.map((v) => `${v.videoWidth}x${v.videoHeight}`).join(', ')));
+
+export const remoteNames = (page) =>
+  page.$$eval('.remote-tile .name-tag-text', (els) => els.map((e) => e.textContent).sort());

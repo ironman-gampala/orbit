@@ -5,6 +5,8 @@ import type { RosterEntry } from './roster';
 export type SignalPayload =
   | { kind: 'description'; description: RTCSessionDescriptionInit }
   | { kind: 'candidate'; candidate: RTCIceCandidateInit }
+  /** Candidates are batched so a full mesh stays well under Realtime's message rate limits. */
+  | { kind: 'candidates'; candidates: RTCIceCandidateInit[] }
   | { kind: 'bye' };
 
 interface SignalEnvelope {

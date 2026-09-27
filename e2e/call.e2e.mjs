@@ -1,7 +1,7 @@
 // Two independent browsers join the same room on a deployed Orbit and exercise a full call.
 // Usage: npm run e2e            (defaults to https://orbitcall.netlify.app)
 //        BASE_URL=http://localhost:8888 npm run e2e
-import { BASE, enterLobby, join, launchParticipant, randomRoom, waitForStatus } from './browser.mjs';
+import { BASE, enterLobby, join, launchParticipant, randomRoom, remoteVideosPlaying, waitForStatus } from './browser.mjs';
 
 const room = randomRoom();
 const t0 = Date.now();
@@ -14,15 +14,7 @@ async function step(name, fn) {
   log('PASS', name, detail ?? '');
 }
 
-const remoteVideoSize = (page) =>
-  page
-    .waitForFunction(() => {
-      const v = document.querySelector('.stage-video');
-      return v && v.videoWidth > 0 && !v.paused;
-    }, { timeout: 20000 })
-    .then(() => page.$eval('.stage-video', (v) => `${v.videoWidth}x${v.videoHeight}`));
-
-const remoteAudioTracks = (page) => page.$eval('.stage-video', (v) => v.srcObject?.getAudioTracks().length ?? 0);
+const remoteAudioTracks = (page) => page.$eval('.remote-tile .tile-video', (v) => v.srcObject?.getAudioTracks().length ?? 0);
 
 let alice;
 let bob;
@@ -44,15 +36,15 @@ try {
     await Promise.all([waitForStatus(alice.page, 'connected'), waitForStatus(bob.page, 'connected')]);
   });
 
-  await step("Alice receives Bob's video", () => remoteVideoSize(alice.page));
-  await step("Bob receives Alice's video", () => remoteVideoSize(bob.page));
+  await step("Alice receives Bob's video", () => remoteVideosPlaying(alice.page, 1));
+  await step("Bob receives Alice's video", () => remoteVideosPlaying(bob.page, 1));
   await step('Audio flows both ways', async () => {
     if ((await remoteAudioTracks(alice.page)) !== 1 || (await remoteAudioTracks(bob.page)) !== 1) throw new Error('missing remote audio track');
   });
 
   await step('Names exchanged over the data channel', async () => {
-    await alice.page.waitForFunction(() => document.querySelector('.stage .name-tag-text')?.textContent === 'Bob', { timeout: 10000 });
-    await bob.page.waitForFunction(() => document.querySelector('.stage .name-tag-text')?.textContent === 'Alice', { timeout: 10000 });
+    await alice.page.waitForFunction(() => document.querySelector('.remote-tile .name-tag-text')?.textContent === 'Bob', { timeout: 10000 });
+    await bob.page.waitForFunction(() => document.querySelector('.remote-tile .name-tag-text')?.textContent === 'Alice', { timeout: 10000 });
   });
 
   await step('Chat message delivered', async () => {
@@ -64,14 +56,14 @@ try {
 
   await step('Mute is shown to the other side', async () => {
     await alice.page.click('.call-controls .round-btn:nth-child(1)');
-    await bob.page.waitForFunction(() => document.querySelector('.stage .badge-muted')?.hidden === false, { timeout: 10000 });
+    await bob.page.waitForFunction(() => document.querySelector('.remote-tile .badge-muted')?.hidden === false, { timeout: 10000 });
   });
 
   await step('Camera off shows avatar; camera on restores video', async () => {
     await alice.page.click('.call-controls .round-btn:nth-child(2)');
-    await bob.page.waitForSelector('.stage.video-off', { timeout: 10000 });
+    await bob.page.waitForSelector('.remote-tile.video-off', { timeout: 10000 });
     await alice.page.click('.call-controls .round-btn:nth-child(2)');
-    await bob.page.waitForFunction(() => !document.querySelector('.stage').classList.contains('video-off'), { timeout: 10000 });
+    await bob.page.waitForFunction(() => !document.querySelector('.remote-tile').classList.contains('video-off'), { timeout: 10000 });
   });
 
   await step('Hang up returns the other side to waiting', async () => {

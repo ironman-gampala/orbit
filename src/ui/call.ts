@@ -1,9 +1,12 @@
-import { CallSession, type CallStatus, type ChatEntry, type LocalMediaSnapshot, type RemoteInfo } from '../call-session';
+import { CallSession, type CallStatus, type ChatEntry, type LocalMediaSnapshot, type Participant } from '../call-session';
 import type { AppConfig } from '../config';
 import { MAX_CHAT_LENGTH } from '../messages';
 import { roomUrl } from '../room';
-import { attachStream, copyText, h, icon, initials, showToast, type Cleanup, type IconName } from './dom';
+import { ROOM_CAPACITY } from '../roster';
+import { copyText, h, icon, showToast, type Cleanup, type IconName } from './dom';
 import type { LobbyResult } from './lobby';
+import { SpeakingMonitor } from './speaking';
+import { VideoTile } from './tile';
 
 export interface CallScreenOptions {
   config: AppConfig;
@@ -14,44 +17,28 @@ export interface CallScreenOptions {
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const MOD = isMac ? '⌘' : 'Ctrl';
+const SELF = 'self';
+const narrowQuery = window.matchMedia('(max-width: 860px)');
 
 export function mountCall(container: HTMLElement, opts: CallScreenOptions): Cleanup {
   const link = roomUrl(opts.roomId);
-  let remote: RemoteInfo | null = null;
-  let hasRemoteVideo = false;
   let status: CallStatus = { kind: 'joining' };
   let connectedAt = 0;
   let unread = 0;
   let chatOpen = false;
 
-  // Remote stage
-  const remoteVideo = h('video', { class: 'stage-video', autoplay: true, playsInline: true });
-  const remoteAvatar = h('div', { class: 'avatar avatar-xl' });
-  const remoteName = h('span', { class: 'name-tag-text' });
-  const remoteMicOff = h('span', { class: 'badge-muted', hidden: true, title: 'Muted' }, icon('micOff'));
+  // Stage: remote tiles first, self last, laid out by layout()
+  const selfTile = new VideoTile(true);
+  const remoteTiles = new Map<string, VideoTile>();
+  const grid = h('div', { class: 'grid' }, selfTile.el);
   const overlayTitle = h('h2', {});
   const overlayBody = h('div', { class: 'overlay-body' });
   const overlay = h('div', { class: 'stage-overlay' }, overlayTitle, overlayBody);
-  const stage = h(
-    'div',
-    { class: 'stage video-off' },
-    remoteVideo,
-    h('div', { class: 'tile-avatar' }, remoteAvatar),
-    h('div', { class: 'name-tag' }, remoteMicOff, remoteName),
-    overlay,
-  );
+  const stage = h('div', { class: 'stage' }, grid, overlay);
 
-  // Self view
-  const selfVideo = h('video', { class: 'tile-video mirrored', autoplay: true, playsInline: true, muted: true });
-  const selfAvatar = h('div', { class: 'avatar' }, initials(opts.lobby.name));
-  const selfMicOff = h('span', { class: 'badge-muted', hidden: true, title: 'You are muted' }, icon('micOff'));
-  const selfTile = h(
-    'div',
-    { class: 'tile self-tile video-off' },
-    selfVideo,
-    h('div', { class: 'tile-avatar' }, selfAvatar),
-    h('div', { class: 'name-tag' }, selfMicOff, h('span', { class: 'name-tag-text' }, 'You')),
-  );
+  const speaking = new SpeakingMonitor((id, isSpeaking) => {
+    (id === SELF ? selfTile : remoteTiles.get(id))?.setSpeaking(isSpeaking);
+  });
 
   // Controls
   const micButton = controlButton(() => void session.toggleMic());
@@ -69,18 +56,20 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
   );
   const clock = h('span', { class: 'call-clock' });
   const statusDot = h('span', { class: 'status-dot' });
+  const peopleCount = h('span', { class: 'people-count-value' }, '1');
+  const people = h('span', { class: 'people-count', title: `Up to ${ROOM_CAPACITY} people` }, icon('people'), peopleCount);
 
   const controls = h(
     'footer',
     { class: 'call-bar' },
     h('div', { class: 'call-meta' }, statusDot, clock, h('span', { class: 'divider' }), h('span', { class: 'room-name', title: opts.roomId }, opts.roomId)),
     h('div', { class: 'call-controls' }, micButton, camButton, screenButton, chatButton, hangupButton),
-    h('div', { class: 'call-side' }),
+    h('div', { class: 'call-side' }, people),
   );
 
   // Chat
   const chatList = h('ol', { class: 'chat-list', 'aria-live': 'polite' });
-  const chatEmpty = h('p', { class: 'chat-empty' }, 'Messages are sent directly to the other person and disappear when the call ends.');
+  const chatEmpty = h('p', { class: 'chat-empty' }, 'Messages go straight to everyone in the call and disappear when it ends.');
   const chatInput = h('input', {
     class: 'input chat-input',
     type: 'text',
@@ -106,7 +95,7 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
         onSubmit: (event: Event) => {
           event.preventDefault();
           if (session.sendChat(chatInput.value)) chatInput.value = '';
-          else if (chatInput.value.trim()) showToast('Chat is available once the other person is connected.');
+          else if (chatInput.value.trim()) showToast('Chat opens as soon as someone else is connected.');
         },
       },
       chatInput,
@@ -114,7 +103,7 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
     ),
   );
 
-  const page = h('main', { class: 'call' }, h('div', { class: 'call-main' }, stage, selfTile, chatPanel), controls);
+  const page = h('main', { class: 'call' }, h('div', { class: 'call-main' }, stage, chatPanel), controls);
   container.replaceChildren(page);
 
   const session = new CallSession({
@@ -133,15 +122,7 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
         renderStatus();
         if (next.kind === 'ended' || next.kind === 'full' || next.kind === 'error') opts.onFinished(next);
       },
-      onRemoteStream: (stream) => {
-        hasRemoteVideo = !!stream?.getVideoTracks().length;
-        attachStream(remoteVideo, stream);
-        renderRemote();
-      },
-      onRemoteInfo: (info) => {
-        remote = info;
-        renderRemote();
-      },
+      onParticipants: (participants) => renderParticipants(participants),
       onLocalMedia: (snapshot) => renderLocal(snapshot),
       onChat: (entry) => addChat(entry),
       onNotice: (message) => showToast(message),
@@ -160,31 +141,77 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
     button.title = label;
   }
 
-  function renderLocal({ preview, media }: LocalMediaSnapshot) {
-    attachStream(selfVideo, preview.getVideoTracks().length ? preview : null);
-    selfTile.classList.toggle('video-off', !preview.getVideoTracks().length);
-    selfVideo.classList.toggle('mirrored', !media.screen);
-    selfMicOff.hidden = media.audio;
+  function renderLocal({ preview, mic, media }: LocalMediaSnapshot) {
+    selfTile.update({ name: opts.lobby.name, media, stream: preview.getVideoTracks().length ? preview : null, connection: 'connected' });
+    speaking.watch(SELF, mic);
 
     setControl(micButton, media.audio ? 'mic' : 'micOff', !media.audio, `${media.audio ? 'Turn off' : 'Turn on'} microphone (${MOD}+D)`);
     setControl(camButton, media.video ? 'cam' : 'camOff', !media.video, `${media.video ? 'Turn off' : 'Turn on'} camera (${MOD}+E)`);
     setControl(screenButton, 'screen', false, media.screen ? 'Stop presenting' : 'Present your screen', media.screen);
     screenButton.hidden = !session.canShareScreen;
+    layout();
   }
 
-  function renderRemote() {
-    const name = remote?.name ?? 'Guest';
-    remoteName.textContent = remote ? (remote.media.screen ? `${name} (presenting)` : name) : '';
-    remoteAvatar.textContent = initials(name);
-    remoteMicOff.hidden = !remote || remote.media.audio;
-    const showVideo = hasRemoteVideo && (!remote || remote.media.video || remote.media.screen);
-    stage.classList.toggle('video-off', !showVideo);
-    stage.classList.toggle('presenting', !!remote?.media.screen);
+  function renderParticipants(participants: Participant[]) {
+    const ids = new Set(participants.map((p) => p.id));
+    for (const [id, tile] of remoteTiles) {
+      if (ids.has(id)) continue;
+      tile.el.remove();
+      remoteTiles.delete(id);
+      speaking.unwatch(id);
+    }
+    for (const participant of participants) {
+      let tile = remoteTiles.get(participant.id);
+      if (!tile) {
+        tile = new VideoTile(false);
+        grid.insertBefore(tile.el, selfTile.el);
+        remoteTiles.set(participant.id, tile);
+      }
+      tile.update(participant);
+      speaking.watch(participant.id, participant.stream?.getAudioTracks()[0] ?? null);
+    }
+    peopleCount.textContent = String(participants.length + 1);
+    page.dataset.people = String(participants.length + 1);
+    layout();
+    renderStatus();
+  }
+
+  /**
+   * solo: just you, waiting. pair: the other person fills the stage with you
+   * floating in the corner. grid: everyone in equal tiles. spotlight: a remote
+   * screen share takes the stage and everyone else lines up beside it.
+   */
+  function layout() {
+    const remotes = [...remoteTiles.values()];
+    const presenter = remotes.find((t) => t.presenting);
+    const total = remotes.length + 1;
+    const narrow = narrowQuery.matches;
+    const mode = remotes.length === 0 ? 'solo' : remotes.length === 1 ? 'pair' : presenter && !narrow ? 'spotlight' : 'grid';
+    page.dataset.layout = mode;
+
+    for (const tile of remotes) tile.el.classList.toggle('spotlight', mode === 'spotlight' && tile === presenter);
+
+    let cols = 1;
+    let rows = 1;
+    if (mode === 'grid') {
+      cols = narrow ? (total <= 3 ? 1 : 2) : Math.ceil(Math.sqrt(total));
+      rows = Math.ceil(total / cols);
+    } else if (mode === 'spotlight') {
+      cols = 2;
+      rows = total - 1;
+    }
+    grid.style.setProperty('--cols', String(cols));
+    grid.style.setProperty('--rows', String(rows));
   }
 
   function renderStatus() {
     page.dataset.status = status.kind;
-    overlay.hidden = status.kind === 'connected';
+    const fewPeople = remoteTiles.size <= 1;
+    const showOverlay =
+      status.kind === 'joining' ||
+      status.kind === 'waiting' ||
+      ((status.kind === 'connecting' || status.kind === 'reconnecting') && fewPeople);
+    overlay.hidden = !showOverlay;
     overlayBody.replaceChildren();
 
     switch (status.kind) {
@@ -192,9 +219,9 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
         overlayTitle.textContent = 'Joining…';
         break;
       case 'waiting':
-        overlayTitle.textContent = 'Waiting for someone to join';
+        overlayTitle.textContent = 'You’re the first one here';
         overlayBody.append(
-          h('p', {}, 'Share this link with the person you want to talk to:'),
+          h('p', {}, `Share this link with anyone you want in the room. Up to ${ROOM_CAPACITY} people can join.`),
           h(
             'div',
             { class: 'share-link' },
@@ -282,6 +309,7 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
     }
   };
   window.addEventListener('keydown', onKeyDown);
+  narrowQuery.addEventListener('change', layout);
   const clockTimer = window.setInterval(renderClock, 1000);
 
   renderStatus();
@@ -289,7 +317,9 @@ export function mountCall(container: HTMLElement, opts: CallScreenOptions): Clea
 
   return () => {
     window.removeEventListener('keydown', onKeyDown);
+    narrowQuery.removeEventListener('change', layout);
     window.clearInterval(clockTimer);
+    speaking.destroy();
     void session.hangUp();
     page.remove();
   };

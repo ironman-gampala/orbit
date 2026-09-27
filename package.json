@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "node e2e/call.e2e.mjs",
+    "e2e:group": "node e2e/group.e2e.mjs",
     "screenshots": "node e2e/screenshots.mjs"
   },
   "dependencies": {
